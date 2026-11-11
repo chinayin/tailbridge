@@ -1,0 +1,56 @@
+# 本机 Docker 测试的可用示例；复制到 local/e2e/environment.yaml 后按需修改。
+# 所有输入字段均显式填写；不自动拼接域名前缀。
+
+# Compose 项目名；不同实例使用不同名字，避免共享状态卷。
+project: tailbridge-e2e
+
+# 完整尾网域；设备名示例：client-server.e2e.tb.test。
+base_domain: e2e.tb.test
+
+# 控制面的完整 HTTPS URL；该域名由测试 Docker 网络解析，并由测试 CA 签发证书。
+server_url: https://hs.private.test
+
+# 整数端口；本机管理入口为 http://127.0.0.1:3000/admin。
+webui_port: 3000
+
+# 左侧是固定的 Compose 服务名，右侧是可修改的 client-* 设备名称。
+nodes:
+  client-macbook: client-macbook
+  client-macmini: client-macmini
+  client-server: client-server
+
+# 测试角色映射到服务；client-a 获准使用出口，client-b 为拒绝对照。
+# target 和 exit 由同一模拟节点提供，不改变其持久化身份。
+aliases:
+  client-a: client-macbook
+  client-b: client-macmini
+  target: client-server
+  exit: client-server
+
+# 仅用于隔离 Compose 网络：IPv4 基准测试地址、IPv6 文档地址，不访问公网。
+# 新实例须选择不与已运行实例冲突的子网；.1 / ::1 留给 Docker 网关。
+exit_probe:
+  ipv4_subnet: 198.19.0.0/24
+  ipv4_address: 198.19.0.10
+  ipv6_subnet: 2001:db8:79::/64
+  ipv6_address: 2001:db8:79::10
+  # 出口侧链路和 HTTP 网络命名空间地址；目标必须位于另一网段。
+  link_ipv4_subnet: 198.18.0.0/24
+  link_ipv4_address: 198.18.0.20
+  link_ipv6_subnet: 2001:db8:77::/64
+  link_ipv6_address: 2001:db8:77::20
+
+# 与生产相同的原生 map；隔离网络通过 Docker DNS 寻址，因此省略可选 ipv4。
+derp_map:
+  regions:
+    910:
+      regionid: 910
+      regioncode: ap-east-1
+      regionname: Hong Kong
+      nodes:
+        - name: tb-derp-hk-01
+          regionid: 910
+          hostname: derp.private.test
+          derpport: 8443
+          stunport: 3478
+          canport80: false

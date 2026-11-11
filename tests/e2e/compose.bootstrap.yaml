@@ -1,0 +1,22 @@
+# 仅首次注册或显式重新认证时加载；成功后启动器用基础模板移除挂载。
+services:
+  client-server:
+    secrets:
+      - source: server-authkey
+        target: tailscale_authkey
+  client-macbook:
+    secrets:
+      - source: macbook-authkey
+        target: tailscale_authkey
+  client-macmini:
+    secrets:
+      - source: macmini-authkey
+        target: tailscale_authkey
+
+secrets:
+  server-authkey:
+    file: ${TB_E2E_GENERATED}/workstation.authkey
+  macbook-authkey:
+    file: ${TB_E2E_GENERATED}/macbook.authkey
+  macmini-authkey:
+    file: ${TB_E2E_GENERATED}/macmini.authkey

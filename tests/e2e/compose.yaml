@@ -1,0 +1,239 @@
+# Ubuntu 镜像只备系统工具；组件在启动时由根目录 install.sh 安装。
+x-runtime: &runtime
+  image: ${COMPOSE_PROJECT_NAME}-runtime
+  build:
+    context: ${TB_INSTALL_SOURCE:?Use tests/e2e/e2e.py}
+    dockerfile: tests/e2e/node.Dockerfile
+  init: true
+  working_dir: /app
+  entrypoint: [bash, /app/start.sh]
+  depends_on:
+    installer-files: {condition: service_healthy}
+
+x-node: &node
+  <<: *runtime
+  command: [node]
+  cap_add: [NET_ADMIN, NET_RAW]
+  devices: [/dev/net/tun:/dev/net/tun]
+  networks: [service]
+
+x-environment: &environment
+  # 空值表示主动禁用镜像内代理设置，不是等待填写的配置占位符。
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  ALL_PROXY: ""
+  http_proxy: ""
+  https_proxy: ""
+  all_proxy: ""
+  NO_PROXY: "*"
+  no_proxy: "*"
+  TS_NO_LOGS_NO_SUPPORT: "true"
+  SERVER_URL: ${SERVER_URL:?Use tests/e2e/e2e.py}
+  INSTALL_BASE_URL: http://installer-files:8080
+  TB_HEADSCALE_VERSION: ${TB_HEADSCALE_VERSION:-}
+  TB_TAILSCALE_VERSION: ${TB_TAILSCALE_VERSION:-}
+  TB_INSTALL_PROXY: ${TB_INSTALL_PROXY:-}
+  ADVERTISE_EXIT_NODE: "false"
+
+services:
+  installer-files:
+    image: python:3.12-alpine
+    command: [python, -m, http.server, '8080', --directory, /srv]
+    volumes:
+      - ${TB_INSTALL_SOURCE}/files:/srv/files:ro
+      - ${TB_INSTALL_SOURCE}/install.sh:/srv/install.sh:ro
+    networks: [service]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/files/config.yaml', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  control:
+    <<: *runtime
+    # E2E 每次 up 明确重置测试策略，验证初始拒绝后再授予测试权限。
+    command: [control, --force]
+    environment:
+      <<: *environment
+      BASE_DOMAIN: ${BASE_DOMAIN}
+      DERP_REGION_ID: ${DERP_REGION_ID}
+      DERP_REGION_CODE: ${DERP_REGION_CODE}
+      DERP_REGION_NAME: ${DERP_REGION_NAME}
+      DERP_NODE_NAME: ${DERP_NODE_NAME}
+      DERP_HOSTNAME: ${DERP_HOSTNAME}
+      DERP_IPV4: ${DERP_IPV4:-}
+      DERP_PORT: ${DERP_PORT}
+      TLS_CERT_PATH: /run/tailbridge/control.crt
+      TLS_KEY_PATH: /run/tailbridge/control.key
+    volumes:
+      - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro
+      - ${TB_E2E_SOURCE}/start.sh:/app/start.sh:ro
+      - ${TB_E2E_SOURCE}/publish_policy.py:/app/publish_policy.py:ro
+      - ${TB_E2E_BUNDLE}/config:/etc/headscale
+      - ${TB_E2E_BUNDLE}/tls/fullchain.pem:/run/secrets/control.crt:ro
+      - ${TB_E2E_BUNDLE}/secrets/control_tls_key:/run/secrets/control.key:ro
+      - control-data:/var/lib/headscale
+    networks:
+      service:
+        aliases: ["${TB_SERVER_HOST}"]
+
+  derp-main:
+    <<: *runtime
+    command: [derp]
+    environment:
+      <<: *environment
+      DERP_HOSTNAME: ${DERP_HOSTNAME}
+      DERP_PORT: ${DERP_PORT}
+      SSL_CERT_FILE: /etc/tailbridge/ca.crt
+    volumes:
+      - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro
+      - ${TB_E2E_SOURCE}/start.sh:/app/start.sh:ro
+      - ${TB_E2E_GENERATED}/ca.crt:/etc/tailbridge/ca.crt:ro
+      - ${TB_E2E_BUNDLE}/tls/derp-main.crt:/run/secrets/derper/${DERP_HOSTNAME}.crt:ro
+      - ${TB_E2E_BUNDLE}/secrets/derp-main.key:/run/secrets/derper/${DERP_HOSTNAME}.key:ro
+      - derp-main-data:/var/lib/derper
+    networks:
+      service:
+        aliases: ["${DERP_HOSTNAME}"]
+
+  webui:
+    image: ghcr.io/tale/headplane:0.8.2
+    profiles: [ui]
+    ports: ["127.0.0.1:${TB_WEBUI_PORT}:3000"]
+    environment:
+      <<: *environment
+      NODE_EXTRA_CA_CERTS: /etc/headplane/ca.crt
+    volumes:
+      - ${TB_E2E_GENERATED}/ca.crt:/etc/headplane/ca.crt:ro
+      - ${TB_E2E_BUNDLE}/config/headplane.yaml:/etc/headplane/config.yaml:ro
+      - ${TB_E2E_BUNDLE}/config:/etc/headscale:ro
+      - ${TB_E2E_BUNDLE}/secrets/webui_cookie_secret:/run/secrets/webui_cookie_secret:ro
+      - webui-data:/var/lib/headplane
+    networks: [service, ui-access]
+
+  client-server:
+    <<: *node
+    hostname: ${TB_CLIENT_SERVER_HOSTNAME}
+    environment:
+      <<: *environment
+      TB_NODE_ROLE: server
+      ADVERTISE_EXIT_NODE: "true"
+      TB_EXIT_PROBE_IPV4_SUBNET: ${TB_EXIT_PROBE_IPV4_SUBNET}
+      TB_EXIT_PROBE_IPV6_SUBNET: ${TB_EXIT_PROBE_IPV6_SUBNET}
+      TB_EXIT_PROBE_LINK_IPV4_ADDRESS: ${TB_EXIT_PROBE_LINK_IPV4_ADDRESS}
+      TB_EXIT_PROBE_LINK_IPV6_ADDRESS: ${TB_EXIT_PROBE_LINK_IPV6_ADDRESS}
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+    networks: [service, egress]
+    volumes:
+      - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro
+      - ${TB_E2E_SOURCE}/start.sh:/app/start.sh:ro
+      - ${TB_E2E_SOURCE}/node.sh:/app/node.sh:ro
+      - ${TB_E2E_SOURCE}/node_status.py:/app/node_status.py:ro
+      - client-server-state:/var/lib/tailscale
+      - ${TB_E2E_GENERATED}/ca.crt:/usr/local/share/ca-certificates/tailbridge.crt:ro
+      - ${TB_E2E_GENERATED}/authorized_keys:/etc/tailbridge/ssh/authorized_keys:ro
+    secrets:
+      - source: server-host-key
+        target: ssh_host_key
+
+  client-macbook:
+    <<: *node
+    hostname: ${TB_CLIENT_MACBOOK_HOSTNAME}
+    environment:
+      <<: *environment
+      TB_NODE_ROLE: client
+    volumes:
+      - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro
+      - ${TB_E2E_SOURCE}/start.sh:/app/start.sh:ro
+      - ${TB_E2E_SOURCE}/node.sh:/app/node.sh:ro
+      - ${TB_E2E_SOURCE}/node_status.py:/app/node_status.py:ro
+      - client-macbook-state:/var/lib/tailscale
+      - ${TB_E2E_GENERATED}/ca.crt:/usr/local/share/ca-certificates/tailbridge.crt:ro
+      - ${TB_E2E_GENERATED}/known_hosts:/etc/tailbridge/ssh/known_hosts:ro
+    secrets:
+      - source: macbook-ssh-key
+        target: ssh_client_key
+
+  client-macmini:
+    <<: *node
+    hostname: ${TB_CLIENT_MACMINI_HOSTNAME}
+    environment:
+      <<: *environment
+      TB_NODE_ROLE: client
+    volumes:
+      - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro
+      - ${TB_E2E_SOURCE}/start.sh:/app/start.sh:ro
+      - ${TB_E2E_SOURCE}/node.sh:/app/node.sh:ro
+      - ${TB_E2E_SOURCE}/node_status.py:/app/node_status.py:ro
+      - client-macmini-state:/var/lib/tailscale
+      - ${TB_E2E_GENERATED}/ca.crt:/usr/local/share/ca-certificates/tailbridge.crt:ro
+      - ${TB_E2E_GENERATED}/known_hosts:/etc/tailbridge/ssh/known_hosts:ro
+    secrets:
+      - source: macmini-ssh-key
+        target: ssh_client_key
+
+  probe:
+    image: python:3.12-alpine
+    working_dir: /app
+    command: [python, -u, /app/echo.py]
+    volumes:
+      - ${TB_E2E_SOURCE}/echo.py:/app/echo.py:ro
+    networks: [service]
+
+  # 模拟一个经下一跳可达的 HTTP 主机；目标 IP 在 lo，不是出口的直连 LAN。
+  httpbin-network:
+    image: ${COMPOSE_PROJECT_NAME}-runtime
+    init: true
+    working_dir: /app
+    cap_add: [NET_ADMIN]
+    entrypoint: [bash, /app/httpbin-network.sh]
+    environment:
+      TB_EXIT_PROBE_IPV4_ADDRESS: ${TB_EXIT_PROBE_IPV4_ADDRESS}
+      TB_EXIT_PROBE_IPV6_ADDRESS: ${TB_EXIT_PROBE_IPV6_ADDRESS}
+    volumes:
+      - ${TB_E2E_SOURCE}/httpbin-network.sh:/app/httpbin-network.sh:ro
+    networks:
+      egress:
+        ipv4_address: ${TB_EXIT_PROBE_LINK_IPV4_ADDRESS:?Use tests/e2e/e2e.py}
+        ipv6_address: ${TB_EXIT_PROBE_LINK_IPV6_ADDRESS:?Use tests/e2e/e2e.py}
+
+  # 使用 go-httpbin 镜像，复用上述网络空间，无尾网身份、无代理和宿主端口。
+  httpbin:
+    image: ghcr.io/mccutchen/go-httpbin:2.26.0
+    working_dir: /app
+    environment:
+      HOST: "::"
+      PORT: "8080"
+    network_mode: service:httpbin-network
+    depends_on: [httpbin-network]
+
+networks:
+  service:
+    # 首次安装需要访问官方发布站点；不发布核心组件的宿主端口。
+    internal: false
+  ui-access:
+  egress:
+    internal: true
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: ${TB_EXIT_PROBE_LINK_IPV4_SUBNET:?Use tests/e2e/e2e.py}
+        - subnet: ${TB_EXIT_PROBE_LINK_IPV6_SUBNET:?Use tests/e2e/e2e.py}
+
+secrets:
+  server-host-key:
+    file: ${TB_E2E_GENERATED}/workstation.hostkey
+  macbook-ssh-key:
+    file: ${TB_E2E_GENERATED}/macbook.sshkey
+  macmini-ssh-key:
+    file: ${TB_E2E_GENERATED}/macmini.sshkey
+
+volumes:
+  control-data:
+  derp-main-data:
+  webui-data:
+  client-server-state:
+  client-macbook-state:
+  client-macmini-state:

@@ -1,0 +1,14 @@
+# 首次安装只初始化一个区域；后续多区域在控制面维护。
+regions:
+  ${DERP_REGION_ID}:
+    regionid: ${DERP_REGION_ID}
+    regioncode: "${DERP_REGION_CODE}"
+    regionname: "${DERP_REGION_NAME}"
+    nodes:
+      - name: "${DERP_NODE_NAME}"
+        regionid: ${DERP_REGION_ID}
+        hostname: "${DERP_HOSTNAME}"
+        ipv4: "${DERP_IPV4}"
+        derpport: ${DERP_PORT}
+        stunport: 3478
+        canport80: false

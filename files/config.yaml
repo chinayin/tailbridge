@@ -1,0 +1,44 @@
+# Headscale 0.29.7 完整项目配置；占位符只在目标机替换。
+server_url: "${SERVER_URL}"
+listen_addr: 0.0.0.0:443
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+trusted_proxies: []
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+prefixes:
+  v4: 100.77.0.0/23
+  v6: fd7a:115c:a1e0:77::/64
+derp:
+  server:
+    enabled: false
+  urls: []
+  paths: [/etc/headscale/derp.yaml]
+  auto_update_enabled: true
+  update_frequency: 1m
+disable_check_updates: true
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+tls_letsencrypt_hostname: "${TLS_HOSTNAME}"
+tls_letsencrypt_cache_dir: /var/lib/headscale/cache
+tls_letsencrypt_challenge_type: TLS-ALPN-01
+acme_email: "${ACME_EMAIL}"
+tls_cert_path: "${TLS_CERT_PATH}"
+tls_key_path: "${TLS_KEY_PATH}"
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+dns:
+  magic_dns: true
+  base_domain: "${BASE_DOMAIN}"
+  override_local_dns: false
+  nameservers:
+    global: []
+    split: {}
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+logtail:
+  enabled: false

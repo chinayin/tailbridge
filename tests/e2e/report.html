@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TailBridge E2E 测试报告 · ${status}</title>
+  <style>
+    :root { color-scheme: light; --ink: #203349; --muted: #53677c; --line: #d9e2eb; --blue: #235a98; --pass: #176449; --fail: #a83130; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: #eef2f6; font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    main { max-width: 1100px; margin: 36px auto; padding: 36px 44px; background: white; border-top: 5px solid var(--blue); }
+    header { display: flex; justify-content: space-between; gap: 24px; align-items: baseline; }
+    h1 { font-size: 28px; line-height: 1.3; letter-spacing: -.5px; margin: 0 0 24px; }
+    h1 small { display: block; font-size: 15px; font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: 8px; }
+    h2 { font-size: 18px; margin: 28px 0 12px; }
+    a { color: var(--blue); text-underline-offset: 4px; }
+    a:focus-visible, summary:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+    .outcome { border-left: 4px solid; padding: 14px 18px; display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; }
+    .outcome strong { font-size: 21px; }
+    .outcome.pass { background: #eef7f2; border-color: var(--pass); }
+    .outcome.fail { background: #fff1ef; border-color: var(--fail); }
+    .pass { color: var(--pass); } .fail { color: var(--fail); }
+    .muted, .scope, footer { color: var(--muted); }
+    .scope { margin: 10px 0 22px; font-size: 13px; }
+    dl { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 32px; margin: 0; }
+    dt { color: var(--muted); font-size: 13px; }
+    dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+    th, td { text-align: left; vertical-align: top; padding: 12px 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+    thead { background: #f2f5f8; font-size: 13px; color: var(--muted); }
+    tbody th { font-weight: 400; }
+    .status-col { width: 74px; } .check-col { width: 46%; }
+    .badge { font-size: 13px; font-weight: 600; white-space: nowrap; }
+    summary { cursor: pointer; color: var(--blue); }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; margin: 12px 0 0; }
+    .error { padding: 16px 20px; background: #fff1ef; border-left: 4px solid var(--fail); margin-top: 22px; }
+    .error h2 { margin: 0; color: var(--fail); }
+    .empty { padding: 24px 10px; color: var(--muted); }
+    .attachments { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+    footer { font-size: 12px; margin-top: 28px; }
+    @media (max-width: 680px) {
+      main { margin: 0; padding: 24px 16px; }
+      header { display: block; margin-bottom: 20px; }
+      h1 { font-size: 25px; margin-bottom: 12px; }
+      dl, .attachments { grid-template-columns: 1fr; gap: 12px; }
+      .status-col { width: 52px; } .check-col { width: 49%; }
+      th, td { padding: 10px 5px; font-size: 13px; }
+      table, tbody { display: block; }
+      colgroup, thead { display: none; }
+      tbody tr { display: grid; grid-template-columns: 42px minmax(0, 1fr); border-bottom: 1px solid var(--line); }
+      tbody th, tbody td { border: 0; }
+      td.evidence { grid-column: 2; padding-top: 0; }
+      td.no-evidence { display: none; }
+      pre { font-size: 11px; }
+    }
+    @media print {
+      body { background: white; } main { margin: 0; padding: 16px; max-width: none; }
+      header a { display: none; } tr, .outcome, .error { break-inside: avoid; }
+      details::details-content { content-visibility: visible; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>TailBridge<small>E2E 测试报告</small></h1>
+    <a href="${json_name}" download>下载原始 JSON</a>
+  </header>
+  <div class="outcome ${status_class}">
+    <strong>${status}</strong><span>已通过 ${count} 项</span><span>耗时 ${duration}</span>
+  </div>
+  <p class="scope">验证范围：${scope}</p>
+  <dl>${metadata}</dl>
+  ${error}
+  <h2>检查结果</h2>
+  <div class="table-wrap">
+    <table>
+      <colgroup><col class="status-col"><col class="check-col"><col></colgroup>
+      <thead><tr><th scope="col">结果</th><th scope="col">检查项</th><th scope="col">详细证据</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <div class="attachments">
+    <details><summary>组件版本</summary><pre>${versions}</pre></details>
+    <details><summary>运行配置</summary><pre>${configuration}</pre></details>
+  </div>
+  <footer>此页与 JSON 使用同一次测试结果生成，可离线查看。浏览器打印可保存为 PDF。</footer>
+</main>
+</body>
+</html>
