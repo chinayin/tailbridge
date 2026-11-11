@@ -2,12 +2,12 @@
 # Install official components on the target; read templates from files/
 set -eu
 
-VERSION=0.5.1
+VERSION=0.5.2
+HEADSCALE_VERSION=0.29.7
+TAILSCALE_VERSION=1.104.5
 INSTALL_BASE_URL=${INSTALL_BASE_URL:-https://raw.githubusercontent.com/chinayin/tailbridge/main}
 DERP_PORT=${DERP_PORT:-443}
 DERP_CERT_DIR=${DERP_CERT_DIR:-/etc/derper/certs}
-HEADSCALE_VERSION=0.29.7
-TAILSCALE_VERSION=1.104.5
 # Maintainers pin the verified Go toolchain; no CLI override
 GO_VERSION=1.27.4
 TB_PREFIX=${TB_PREFIX:-}
@@ -38,6 +38,8 @@ DERP_PORT defaults to 443, DERP_CERT_DIR to /etc/derper/certs.
 Provide <DERP_HOSTNAME>.crt and .key before installing. systemd enables derper;
 without systemd the caller must start the relay using /etc/derper/derper.conf.
 INSTALL_BASE_URL overrides the template source (defaults to this repository's main).
+PROXY optionally sets an HTTP(S) proxy for downloads (curl, apt, Go), not saved.
+NO_PROXY / no_proxy controls bypasses; default: localhost,127.0.0.1,::1.
 Node environment: SERVER_URL; NODE_AUTHKEY for first registration.
 NODE_HOSTNAME is optional; otherwise Tailscale uses the local hostname.
 ADVERTISE_EXIT_NODE=true enables IP forwarding and advertises an exit node;
@@ -91,6 +93,22 @@ reject_value() {
 }
 
 validate_inputs() {
+    if [ -n "${PROXY:-}" ]; then
+        case "${PROXY}" in *'
+'*) die 'newline in PROXY' ;; esac
+        if printf '%s' "${PROXY}" | LC_ALL=C grep -q '[[:space:][:cntrl:]]' ||
+            ! printf '%s\n' "${PROXY}" | LC_ALL=C grep -Eq '^https?://([^/?#[:space:]@]+@)?([a-zA-Z0-9][a-zA-Z0-9._-]*|\[[a-fA-F0-9:.]+\])(:[0-9]{1,5})?/?$'; then
+            die 'PROXY must use http(s)://[user:password@]host[:port]'
+        fi
+        proxy_address=${PROXY%/}
+        proxy_address=${proxy_address#*://}
+        proxy_address=${proxy_address##*@}
+        case "${proxy_address}" in
+            *\]) ;;
+            *:*) proxy_port=${proxy_address##*:}
+                [ "${proxy_port}" -ge 1 ] && [ "${proxy_port}" -le 65535 ] || die 'PROXY port must be between 1 and 65535' ;;
+        esac
+    fi
     case "${ADVERTISE_EXIT_NODE:-false}" in
         true) [ "${ROLE}" = node ] || die 'ADVERTISE_EXIT_NODE=true requires --role node' ;;
         false) ;;
@@ -226,11 +244,22 @@ backup_configuration() {
     CONFIG_PENDING=1
 }
 
+with_proxy() (
+    # Scope proxy settings to download tools and their subprocesses
+    if [ -n "${PROXY:-}" ]; then
+        export http_proxy="${PROXY}" https_proxy="${PROXY}" all_proxy="${PROXY}"
+        export HTTP_PROXY="${PROXY}" HTTPS_PROXY="${PROXY}" ALL_PROXY="${PROXY}"
+        no_proxy=${no_proxy:-${NO_PROXY:-localhost,127.0.0.1,::1}}
+        export no_proxy NO_PROXY="${no_proxy}"
+    fi
+    "$@"
+)
+
 install_tool() {
     [ "${TB_OFFLINE}" != 1 ] || return 0
     command -v "$1" >/dev/null 2>&1 && return 0
-    apt-get update >&2 || die 'apt index update failed'
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${2:-$1}" ca-certificates >&2 || die 'dependency installation failed'
+    with_proxy apt-get update >&2 || die 'apt index update failed'
+    DEBIAN_FRONTEND=noninteractive with_proxy apt-get install -y --no-install-recommends "${2:-$1}" ca-certificates >&2 || die 'dependency installation failed'
 }
 
 download() {
@@ -239,7 +268,10 @@ download() {
         cp "${TB_TEMPLATE_DIR}/${1##*/}" "$2" || die 'offline template is unavailable'
         return
     fi
-    curl -q --fail --silent --show-error --location --retry 4 --retry-all-errors --retry-delay 10 \
+    curl_errors=--show-error
+    # curl can echo the full proxy URL when rejecting its syntax
+    case "${PROXY:-}" in *@*) curl_errors=--no-show-error ;; esac
+    with_proxy curl -q --fail --silent "${curl_errors}" --location --retry 4 --retry-all-errors --retry-delay 10 \
         --connect-timeout 10 --max-time 1800 --speed-limit 1024 --speed-time 60 \
         --output "$2" "$1" || die 'download failed'
 }
@@ -321,7 +353,7 @@ fetch_package() {
         printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
         chmod 755 /usr/sbin/policy-rc.d
         chmod 755 "${TMP}"
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        DEBIAN_FRONTEND=noninteractive with_proxy apt-get install -y --no-install-recommends \
             -o Dpkg::Options::=--force-confold "${TMP}/${HEADSCALE_FILE}" >&2 || die 'Headscale package installation failed'
         rm /usr/sbin/policy-rc.d
         if [ -e "${TMP}/policy-rc.d" ]; then mv "${TMP}/policy-rc.d" /usr/sbin/policy-rc.d; fi
@@ -371,7 +403,7 @@ fetch_go() {
         GO_BIN="${TMP}/go/bin/go"
     fi
     [ "$("${GO_BIN}" version)" = "go version go${GO_VERSION} linux/${ARCH}" ] || die 'Go version mismatch'
-    GOTOOLCHAIN=local GOBIN="${TMP}/bin" CGO_ENABLED=0 "${GO_BIN}" install \
+    GOTOOLCHAIN=local GOBIN="${TMP}/bin" CGO_ENABLED=0 with_proxy "${GO_BIN}" install \
         "tailscale.com/cmd/derper@v${TAILSCALE_VERSION}" >&2 || die 'derper compilation failed'
     install -d "${TB_PREFIX}/usr/local/bin"
     STAGED=$(mktemp "${binary}.XXXXXX")

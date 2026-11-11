@@ -22,6 +22,21 @@ control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.c
 
 云安全组和主机防火墙都需放行对应流量。下文“公网”指 IPv4 `0.0.0.0/0`；提供 IPv6 服务时另配 `::/0`。固定设备来源可限制为其公网 CIDR，漫游设备需允许变化的来源。管理 SSH 的 TCP 22 仅向管理员 IP / 堡垒机开放。
 
+### 下载代理
+
+需要代理时，同时传给入口 `curl` 和安装器；`PROXY` 是本项目的安装输入，外层 `curl` 使用 `-x`：
+
+```bash
+PROXY=http://127.0.0.1:7890
+curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
+  sudo env PROXY="$PROXY" SERVER_URL=https://tailbridge.example.net \
+    NODE_AUTHKEY='<首次注册密钥>' sh -s -- --role node
+```
+
+三个角色均支持 `PROXY=http(s)://[用户:密码@]主机[:端口]`，作用于 curl、apt 和 Go 下载，不写入系统或服务配置。`127.0.0.1` 指执行安装的目标机；容器或远程服务器须使用它能访问的代理地址。
+
+非空 `PROXY` 优先于已传入的标准代理变量；省略或空值则保留标准变量原值。绕过列表使用 `no_proxy`，其次 `NO_PROXY`，均为空时默认 `localhost,127.0.0.1,::1`；内网镜像可在 `sudo env` 后增加 `NO_PROXY=localhost,127.0.0.1,::1,mirror.example.net`。标准代理变量的行为见 [curl 文档](https://everything.curl.dev/usingcurl/proxies/env.html)。
+
 ## 配置持久化
 
 环境变量只作为安装输入，不自动读取 `.env`。安装器渲染配置模板中的已知 `${ENV_NAME}`，发现未替换标记即失败；安装器与 `files/` 须一起更新。安装后直接维护目标机配置，服务启动和机器重启都不依赖登录 shell 的环境变量。

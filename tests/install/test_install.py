@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+PROXY_VARIABLES = ('http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')
 
 
 class InstallTests(unittest.TestCase):
@@ -38,6 +39,8 @@ class InstallTests(unittest.TestCase):
                     'DERP_IPV4': '', 'DERP_PORT': '8443', 'ADVERTISE_EXIT_NODE': '',
                     'DERP_REGION_ID': '910', 'DERP_REGION_CODE': 'ap-east-1',
                     'DERP_REGION_NAME': 'Hong Kong', 'DERP_NODE_NAME': 'tb-derp-hk-01'}
+        for name in (*PROXY_VARIABLES, 'no_proxy', 'NO_PROXY', 'PROXY'):
+            self.env.pop(name, None)
 
     def stub(self, name, code):
         path = self.bin / name
@@ -208,6 +211,118 @@ class InstallTests(unittest.TestCase):
                     result = self.run_install('--dry-run', role=role, changes=changes)
                     self.assertIn(expected + '/files/', result.stderr)
                     self.assertFalse(self.prefix.exists())
+
+    def test_proxy_rejects_invalid_urls_before_writing(self):
+        for value in ('127.0.0.1:7890', 'socks5://localhost:7890', 'http://',
+                      'http://host/path', 'http://host#fragment', 'http://host\nother',
+                      'http://host with spaces'):
+            with self.subTest(value=value):
+                result = self.run_install('--dry-run', changes={'PROXY': value}, expected=1)
+                self.assertIn('PROXY', result.stderr)
+                self.assertFalse(self.prefix.exists())
+
+    def test_proxy_rejects_invalid_authorities_without_echoing_credentials(self):
+        credential = 'review-user:' + 'review-secret'
+        for address in ('http://proxy.test', 'https://[::1]:7890/',
+                        'http://' + credential + '@127.0.0.1:7890'):
+            result = self.run_install('--dry-run', changes={'PROXY': address})
+            self.assertNotIn(credential, result.stderr)
+        for authority in ('127.0.0.1:invalid', '127.0.0.1:0', '127.0.0.1:65536',
+                          '127.0.0.1:999999999999999999', ':7890', '', 'host:'):
+            with self.subTest(authority=authority):
+                result = self.run_install('--dry-run', expected=1,
+                    changes={'PROXY': 'http://' + credential + '@' + authority})
+                self.assertIn('PROXY', result.stderr)
+                self.assertNotIn(credential, result.stderr)
+                self.assertNotIn('review-secret', result.stderr)
+                self.assertFalse(self.prefix.exists())
+
+    def test_curl_failure_does_not_echo_authenticated_proxy(self):
+        curl = shutil.which('curl')
+        self.assertIsNotNone(curl)
+        self.stub('id', 'print("0")')
+        self.stub('curl', f'''
+args = sys.argv[1:]
+args[args.index('--retry') + 1] = '0'
+os.execv({curl!r}, [{curl!r}, *args])
+''')
+        credential = 'review-user:' + 'review-secret'
+        result = self.run_install(expected=1, changes={'TB_OFFLINE': '0',
+                                 'PROXY': 'http://' + credential + '@[a]:7890'})
+        self.assertIn('download failed', result.stderr)
+        self.assertNotIn('review-secret', result.stderr)
+        self.assertFalse(self.prefix.exists())
+
+    def proxy_runtime(self):
+        changes = self.derp_runtime()
+        self.stub('curl', '''
+import shutil
+args=sys.argv[1:]
+names=('http_proxy','https_proxy','all_proxy','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','no_proxy','NO_PROXY')
+Path(os.environ['TEST_PROXY_ENV']).write_text(json.dumps({k:os.environ.get(k) for k in names}))
+shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / args[-1].rsplit('/',1)[1], args[args.index('--output')+1])
+''')
+        return {**changes, 'TEST_PROXY_ENV': str(self.base / 'proxy-env')}
+
+    def test_proxy_applies_to_downloads_without_persisting_or_affecting_service_commands(self):
+        changes = self.proxy_runtime()
+        self.stub('systemctl', '''
+assert not any(os.environ.get(k) for k in ('http_proxy','https_proxy','all_proxy','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY'))
+if sys.argv[1]=='is-active': raise SystemExit(3)
+''')
+        proxy = 'http://127.0.0.1:7890'
+        result = self.run_install(role='derp', changes={**changes, 'PROXY': proxy})
+        values = json.loads((self.base / 'proxy-env').read_text())
+        for name in PROXY_VARIABLES:
+            self.assertEqual(values[name], proxy)
+        for name in ('no_proxy', 'NO_PROXY'):
+            self.assertEqual(values[name], 'localhost,127.0.0.1,::1')
+        for path in ('etc/derper/derper.conf', 'etc/systemd/system/derper.service'):
+            self.assertNotIn(proxy, (self.prefix / path).read_text())
+        self.assertNotIn(proxy, result.stderr)
+
+    def test_proxy_override_and_no_proxy_precedence(self):
+        changes = self.proxy_runtime()
+        proxy = 'https://proxy.example.test:7890'
+        inherited = {name: 'http://old.example.test:8080' for name in PROXY_VARIABLES}
+        for bypass, expected in (({'NO_PROXY': 'mirror.test'}, 'mirror.test'),
+                                 ({'NO_PROXY': 'ignored.test', 'no_proxy': 'files.test'}, 'files.test')):
+            with self.subTest(bypass=bypass):
+                self.run_install(role='derp', changes={**changes, **inherited, **bypass, 'PROXY': proxy})
+                values = json.loads((self.base / 'proxy-env').read_text())
+                self.assertEqual({values[name] for name in PROXY_VARIABLES}, {proxy})
+                self.assertEqual(values['no_proxy'], expected)
+                self.assertEqual(values['NO_PROXY'], expected)
+
+    def test_empty_or_unset_proxy_preserves_standard_proxy_environment(self):
+        changes = self.proxy_runtime()
+        inherited = {'http_proxy': 'http://one.example.test:7890',
+                     'HTTPS_PROXY': 'http://two.example.test:7890', 'no_proxy': 'files.test'}
+        for optional in ({}, {'PROXY': ''}):
+            with self.subTest(optional=optional):
+                self.run_install(role='derp', changes={**changes, **inherited, **optional})
+                values = json.loads((self.base / 'proxy-env').read_text())
+                self.assertEqual(values, {name: inherited.get(name) for name in values})
+
+    def test_proxy_reaches_apt_before_curl_is_installed(self):
+        for name in ('sh', 'grep', 'mktemp', 'rm'):
+            (self.bin / name).symlink_to(shutil.which(name))
+        self.stub('id', 'print("0")')
+        self.stub('apt-get', '''
+with open(os.environ['TEST_APT_ENV'], 'a') as f:
+    f.write(json.dumps({'args':sys.argv[1:], 'http_proxy':os.environ.get('http_proxy'),
+                       'https_proxy':os.environ.get('https_proxy')})+'\\n')
+''')
+        calls = self.base / 'apt-env'
+        self.run_install(changes={'PATH': str(self.bin), 'TB_OFFLINE': '0',
+                                  'PROXY': 'http://127.0.0.1:7890', 'TEST_APT_ENV': str(calls)}, expected=1)
+        values = [json.loads(line) for line in calls.read_text().splitlines()]
+        self.assertEqual([value['args'] for value in values],
+                         [['update'], ['install', '-y', '--no-install-recommends', 'curl', 'ca-certificates']])
+        for value in values:
+            self.assertEqual(value['http_proxy'], 'http://127.0.0.1:7890')
+            self.assertEqual(value['https_proxy'], 'http://127.0.0.1:7890')
+        self.assertFalse(self.prefix.exists())
 
     def test_installer_version_requires_no_role_platform_or_configuration(self):
         self.stub('uname', 'raise SystemExit("version must not inspect the platform")')
@@ -853,11 +968,14 @@ raise SystemExit(0 if hashlib.sha256(Path(path).read_bytes()).hexdigest()==diges
         self.stub('tar', '''
 target=Path(sys.argv[sys.argv.index('-C')+1])/'go/bin/go'
 target.parent.mkdir(parents=True)
-code='import os,sys\\nfrom pathlib import Path\\nif sys.argv[1]=="version": print("go version go1.27.4 linux/arm64")\\nelse:\\n p=Path(os.environ["GOBIN"]); p.mkdir(); (p/"derper").write_text("built derper")\\n'
+code='import os,sys,json\\nfrom pathlib import Path\\nif sys.argv[1]=="version": print("go version go1.27.4 linux/arm64")\\nelse:\\n Path(os.environ["TEST_GO_ENV"]).write_text(json.dumps({k:os.environ.get(k) for k in ("http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY")}))\\n p=Path(os.environ["GOBIN"]); p.mkdir(); (p/"derper").write_text("built derper")\\n'
 target.write_text('#!'+sys.executable+'\\n'+code); target.chmod(0o755)
 ''')
-        self.run_install(role='derp', changes=changes)
+        go_env = self.base / 'go-env'
+        self.run_install(role='derp', changes={**changes, 'PROXY': 'http://127.0.0.1:7890',
+                                             'TEST_GO_ENV': str(go_env)})
         self.assertEqual((self.prefix / 'usr/local/bin/derper').read_text(), 'built derper')
+        self.assertEqual(set(json.loads(go_env.read_text()).values()), {'http://127.0.0.1:7890'})
         self.assertEqual(previous.read(), old_program.encode(), 'running binary must be replaced atomically')
 
 

@@ -38,18 +38,19 @@ class InstallPathTests(unittest.TestCase):
                 path = root / command
                 path.write_text(f'#!{sys.executable}\nimport json, os, sys\n'
                                 'from pathlib import Path\n'
-                                'keys = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY")\n'
+                                'keys = ("PROXY", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY")\n'
                                 'Path(os.environ["PROXY_TEST_LOG"] + Path(sys.argv[0]).name).write_text('
                                 'json.dumps({key: os.environ.get(key, "") for key in keys}))\n')
                 path.chmod(0o755)
             env = {**os.environ, 'PATH': f'{root}:{os.environ["PATH"]}',
                    'PROXY_TEST_LOG': str(root / 'log-'), 'TB_INSTALL_PROXY': 'http://proxy.test:7890',
-                   'HTTP_PROXY': '', 'HTTPS_PROXY': '', 'http_proxy': '', 'https_proxy': '',
+                   'PROXY': '', 'HTTP_PROXY': '', 'HTTPS_PROXY': '', 'http_proxy': '', 'https_proxy': '',
                    'NO_PROXY': '*'}
             subprocess.run(['/bin/bash', str(ROOT / 'start.sh'), 'node'], env=env, check=True)
             installer = json.loads((root / 'log-sh').read_text())
             runtime = json.loads((root / 'log-bash').read_text())
-            self.assertEqual(installer['HTTPS_PROXY'], 'http://proxy.test:7890')
+            self.assertEqual(installer['PROXY'], 'http://proxy.test:7890')
+            self.assertEqual(installer['HTTPS_PROXY'], '')
             self.assertIn('installer-files', installer['NO_PROXY'])
             self.assertNotEqual(installer['NO_PROXY'], '*')
             self.assertEqual(runtime, {key: '*' if key == 'NO_PROXY' else '' for key in runtime})

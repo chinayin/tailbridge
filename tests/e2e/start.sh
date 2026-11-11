@@ -9,9 +9,7 @@ args=(--role "${role}" "$@")
 
 install_component() {
     # Use the download proxy only in the installer subprocess
-    env HTTP_PROXY="${TB_INSTALL_PROXY:-}" HTTPS_PROXY="${TB_INSTALL_PROXY:-}" \
-        http_proxy="${TB_INSTALL_PROXY:-}" https_proxy="${TB_INSTALL_PROXY:-}" \
-        ALL_PROXY='' all_proxy='' NO_PROXY=localhost,127.0.0.1,::1,installer-files \
+    env PROXY="${TB_INSTALL_PROXY:-}" NO_PROXY=localhost,127.0.0.1,::1,installer-files \
         no_proxy=localhost,127.0.0.1,::1,installer-files sh /app/install.sh "${args[@]}"
 }
 

@@ -47,6 +47,7 @@ Pass variables to `sudo env` after the pipe. The installer writes service config
 | --- | --- | --- | --- |
 | `SERVER_URL` | control / derp / node | — | Required control URL, e.g. `https://tailbridge.example.net` |
 | `INSTALL_BASE_URL` | control / derp | This repository's `main` | Optional template root override for a mirror or pinned source; see [installation](docs/INSTALL.md#共用准备) |
+| `PROXY` | All | — | Optional HTTP(S) proxy for installation downloads only; see [proxy setup](docs/INSTALL.md#下载代理) |
 | `BASE_DOMAIN` | control | — | Required MagicDNS domain, e.g. `tb.example.net` |
 | `TLS_HOSTNAME`, `ACME_EMAIL` | control | — | Hostname and contact email for automatic certificates |
 | `TLS_CERT_PATH`, `TLS_KEY_PATH` | control | — | Certificate and key paths when using file certificates |

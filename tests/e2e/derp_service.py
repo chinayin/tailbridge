@@ -17,6 +17,36 @@ CERT_DIR = "/etc/derper/certs"
 CONFIG = "/etc/derper/derper.conf"
 UNIT = "/etc/systemd/system/derper.service"
 IDENTITY = "/var/lib/derper/derper.key"
+PROXY_SERVER = r'''
+from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlsplit
+
+class Proxy(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        target = urlsplit(self.path)
+        if target.scheme != "http" or target.netloc != "templates.invalid":
+            self.send_error(502)
+            return
+        connection = HTTPConnection("127.0.0.1", 8080, timeout=5)
+        try:
+            connection.request("GET", target.path)
+            response = connection.getresponse()
+            data = response.read()
+            self.send_response(response.status)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            with open("/tmp/proxy-requests", "a") as log:
+                log.write(target.path + "\n")
+        finally:
+            connection.close()
+
+HTTPServer(("127.0.0.1", 8081), Proxy).serve_forever()
+'''
 PROBE = r'''
 import os, socket, ssl, struct, sys, zlib
 host, directory, port, closed_port = sys.argv[1:]
@@ -86,6 +116,10 @@ class ServiceTest:
         self.wait(lambda: self.exec("curl", "-q", "-fsS", "--noproxy", "*",
                                    "http://127.0.0.1:8080/files/derper.service", check=False).returncode == 0,
                   "template server")
+        run(["docker", "exec", "-d", self.container, "python3", "-c", PROXY_SERVER])
+        self.wait(lambda: self.exec("python3", "-c", "import socket; "
+                                   "socket.create_connection(('127.0.0.1',8081),timeout=1).close()",
+                                   check=False).returncode == 0, "local download proxy")
 
     def certificate(self, directory, hostname=HOSTNAME, *, san=True):
         self.exec("install", "-d", "-m", "755", directory)
@@ -95,12 +129,14 @@ class ServiceTest:
                   "-addext", "extendedKeyUsage=serverAuth", "-keyout", f"{directory}/{HOSTNAME}.key",
                   "-out", f"{directory}/{HOSTNAME}.crt")
 
-    def install(self, *, port=443, cert_dir=CERT_DIR, force=False, check=True):
-        return self.exec("env", "INSTALL_BASE_URL=http://127.0.0.1:8080",
+    def install(self, *, port=443, cert_dir=CERT_DIR, force=False, check=True,
+                proxy="", base_url="http://127.0.0.1:8080"):
+        return self.exec("env", f"INSTALL_BASE_URL={base_url}", f"PROXY={proxy}",
                          "SERVER_URL=https://control.example.test", f"DERP_HOSTNAME={HOSTNAME}",
                          f"DERP_PORT={port}", f"DERP_CERT_DIR={cert_dir}",
                          "HTTP_PROXY=", "HTTPS_PROXY=", "ALL_PROXY=", "http_proxy=", "https_proxy=",
-                         "all_proxy=", "NO_PROXY=*", "no_proxy=*", "timeout", "45",
+                         "all_proxy=", "NO_PROXY=localhost,127.0.0.1,::1",
+                         "no_proxy=localhost,127.0.0.1,::1", "timeout", "45",
                          "sh", "/source/install.sh", "--role", "derp", "--tailscale-version", self.version,
                          *(["--force"] if force else []), check=check, timeout=50)
 
@@ -144,14 +180,21 @@ class ServiceTest:
         self.boot()
         self.templates()
         self.certificate(CERT_DIR)
-        self.install()
+        self.install(proxy="http://127.0.0.1:8081", base_url="http://templates.invalid")
+        requests = self.exec("cat", "/tmp/proxy-requests").stdout.splitlines()
+        require(requests == ["/files/derper.conf", "/files/derper.service"],
+                "Installer downloads did not traverse the proxy")
+        passed("installer downloads templates through PROXY without direct DNS or network access")
         self.active()
         identity = self.exec("sha256sum", IDENTITY).stdout
         passed("systemd enables non-root DERP with TLS 443, STUN 3478 and no TCP 80")
 
         previous = self.state()
-        self.install()
+        self.install(proxy="http://127.0.0.1:1")
         require(self.state() == previous, "Identical installation restarted DERP or replaced its state")
+        require(self.exec("cat", "/tmp/proxy-requests").stdout.splitlines() == requests,
+                "Loopback downloads unexpectedly used the proxy")
+        passed("NO_PROXY keeps loopback template downloads direct even when the proxy is unavailable")
         passed("identical installation preserves the process, binary and identity")
 
         self.reject("changed port without --force", "use --force", port=8443)

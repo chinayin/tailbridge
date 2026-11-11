@@ -47,6 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 | --- | --- | --- | --- |
 | `SERVER_URL` | control / derp / node | — | 必填控制入口，如 `https://tailbridge.example.net` |
 | `INSTALL_BASE_URL` | control / derp | 本仓库 `main` | 可选模板根地址，仅镜像或固定源码版本时覆盖，见[安装说明](docs/INSTALL.md#共用准备) |
+| `PROXY` | 全部 | 无 | 可选 HTTP(S) 代理，仅用于安装下载，见[下载代理](docs/INSTALL.md#下载代理) |
 | `BASE_DOMAIN` | control | — | 必填 MagicDNS 尾网域，如 `tb.example.net` |
 | `TLS_HOSTNAME`、`ACME_EMAIL` | control | — | 自动证书的域名和联系邮箱 |
 | `TLS_CERT_PATH`、`TLS_KEY_PATH` | control | — | 文件证书模式的证书和私钥路径 |
