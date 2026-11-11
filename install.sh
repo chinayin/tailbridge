@@ -2,9 +2,10 @@
 # Install official components on the target; read templates from files/
 set -eu
 
-VERSION=0.4.2
+VERSION=0.5.0
 INSTALL_BASE_URL=${INSTALL_BASE_URL-}
 DERP_PORT=${DERP_PORT:-443}
+DERP_CERT_DIR=${DERP_CERT_DIR:-/etc/derper/certs}
 HEADSCALE_VERSION=0.29.7
 TAILSCALE_VERSION=1.104.5
 # Maintainers pin the verified Go toolchain; no CLI override
@@ -32,6 +33,10 @@ BASE_DOMAIN, DERP_REGION_ID, DERP_REGION_CODE, DERP_REGION_NAME, DERP_NODE_NAME,
 DERP_HOSTNAME; DERP_PORT defaults to 443. TLS_HOSTNAME and
 ACME_EMAIL for ACME, or TLS_CERT_PATH and TLS_KEY_PATH for file certificates.
 DERP_IPV4 is optional. The Go toolchain version is maintained in this script.
+DERP environment: INSTALL_BASE_URL, SERVER_URL, DERP_HOSTNAME;
+DERP_PORT defaults to 443, DERP_CERT_DIR to /etc/derper/certs.
+Provide <DERP_HOSTNAME>.crt and .key before installing. systemd enables derper;
+without systemd the caller must start the relay using the installed unit parameters.
 Node environment: SERVER_URL; NODE_AUTHKEY for first registration.
 NODE_HOSTNAME is optional; otherwise Tailscale uses the local hostname.
 ADVERTISE_EXIT_NODE=true enables IP forwarding and advertises an exit node;
@@ -121,6 +126,22 @@ validate_inputs() {
             printf '%s\n' "${DERP_REGION_NAME}" | LC_ALL=C grep -q '[^[:space:]]' || die 'DERP region name must not be blank'
             case "${DERP_PORT}" in *[!0-9]*|'') die 'invalid DERP port' ;; esac
             [ "${DERP_PORT}" -ge 1 ] && [ "${DERP_PORT}" -le 65535 ] || die 'invalid DERP port' ;;
+        derp)
+            require_var INSTALL_BASE_URL "${INSTALL_BASE_URL}"
+            require_var SERVER_URL "${SERVER_URL:-}"
+            require_var DERP_HOSTNAME "${DERP_HOSTNAME:-}"
+            for value in "${SERVER_URL}" "${DERP_HOSTNAME}" "${DERP_CERT_DIR}"; do
+                reject_value "${value}"
+                case "${value}" in *\$*|*%*) die 'systemd expansions are not allowed in DERP settings' ;; esac
+            done
+            printf '%s\n' "${SERVER_URL}" | LC_ALL=C grep -Eq '^https://[a-zA-Z0-9.-]+(:[0-9]+)?/?$' ||
+                die 'SERVER_URL must be an HTTPS origin'
+            SERVER_URL=${SERVER_URL%/}
+            printf '%s\n' "${DERP_HOSTNAME}" | LC_ALL=C grep -Eq '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$' ||
+                die 'invalid DERP hostname'
+            case "${DERP_CERT_DIR}" in /*) ;; *) die 'DERP_CERT_DIR must be an absolute path' ;; esac
+            case "${DERP_PORT}" in *[!0-9]*|'') die 'invalid DERP port' ;; esac
+            [ "${DERP_PORT}" -ge 1 ] && [ "${DERP_PORT}" -le 65535 ] || die 'invalid DERP port' ;;
         node) require_var SERVER_URL "${SERVER_URL:-}" ;;
     esac
 }
@@ -147,7 +168,11 @@ print_plan() {
             if [ "${ADVERTISE_EXIT_NODE:-false}" = true ]; then
                 printf 'Enable IPv4/IPv6 forwarding via %s/etc/sysctl.d/99-tailbridge-exit-node.conf; advertise exit after registration\n' "${TB_PREFIX}" >&2
             fi ;;
-        derp) printf 'https://go.dev/dl/%s; tailscale.com/cmd/derper@v%s -> /usr/local/bin/derper\n' "${GO_FILE}" "${TAILSCALE_VERSION}" >&2 ;;
+        derp)
+            printf 'https://go.dev/dl/%s; tailscale.com/cmd/derper@v%s -> /usr/local/bin/derper\n' "${GO_FILE}" "${TAILSCALE_VERSION}" >&2
+            printf '%s/files/derper.service -> %s/etc/systemd/system/derper.service; enable derper\n' "${INSTALL_BASE_URL%/}" "${TB_PREFIX}" >&2
+            printf 'TLS: %s/%s.crt and .key; TCP %s, UDP 3478; identity: /var/lib/derper/derper.key\n' \
+                "${DERP_CERT_DIR}" "${DERP_HOSTNAME}" "${DERP_PORT}" >&2 ;;
     esac
 }
 
@@ -207,7 +232,13 @@ download() {
 }
 
 write_replaced() {
-    sed -e "s|\${SERVER_URL}|${SERVER_URL}|g" \
+    if [ "${ROLE}" = derp ]; then
+        sed -e "s|\${SERVER_URL}|${SERVER_URL}|g" \
+            -e "s|\${DERP_HOSTNAME}|${DERP_HOSTNAME}|g" \
+            -e "s|\${DERP_PORT}|${DERP_PORT}|g" \
+            -e "s|\${DERP_CERT_DIR}|${DERP_CERT_DIR}|g" "$1" > "$2" || die 'template replacement failed'
+    else
+        sed -e "s|\${SERVER_URL}|${SERVER_URL}|g" \
         -e "s|\${BASE_DOMAIN}|${BASE_DOMAIN}|g" \
         -e "s|\${ACME_EMAIL}|${ACME_EMAIL:-}|g" \
         -e "s|\${TLS_HOSTNAME}|${TLS_HOSTNAME:-}|g" \
@@ -220,6 +251,7 @@ write_replaced() {
         -e "s|\${DERP_HOSTNAME}|${DERP_HOSTNAME}|g" \
         -e "s|\${DERP_IPV4}|${DERP_IPV4:-}|g" \
         -e "s|\${DERP_PORT}|${DERP_PORT}|g" "$1" > "$2" || die 'template replacement failed'
+    fi
     if grep -Fq "\${" "$2" || grep -q 'REPLACE_' "$2"; then die 'unresolved template placeholder'; fi
 }
 apply_template() {
@@ -307,6 +339,8 @@ fetch_package() {
 
 fetch_go() {
     [ "${TB_OFFLINE}" != 1 ] || return 0
+    binary="${TB_PREFIX}/usr/local/bin/derper"
+    if [ -x "${binary}" ] && [ "$("${binary}" --version | sed -n '1{s/-ERR-BuildInfo$//;p;}')" = "${TAILSCALE_VERSION}" ]; then return; fi
     GO_BIN=$(command -v go || true)
     if [ -z "${GO_BIN}" ] || [ "$("${GO_BIN}" version)" != "go version go${GO_VERSION} linux/${ARCH}" ]; then
         download "https://go.dev/dl/${GO_FILE}" "${TMP}/${GO_FILE}"
@@ -327,7 +361,11 @@ fetch_go() {
     GOTOOLCHAIN=local GOBIN="${TMP}/bin" CGO_ENABLED=0 "${GO_BIN}" install \
         "tailscale.com/cmd/derper@v${TAILSCALE_VERSION}" >&2 || die 'derper compilation failed'
     install -d "${TB_PREFIX}/usr/local/bin"
-    install -m 755 "${TMP}/bin/derper" "${TB_PREFIX}/usr/local/bin/derper"
+    STAGED=$(mktemp "${binary}.XXXXXX")
+    install -m 755 "${TMP}/bin/derper" "${STAGED}"
+    mv -f "${STAGED}" "${binary}"
+    STAGED=''
+    PACKAGE_CHANGED=1
 }
 
 validate_control() {
@@ -426,7 +464,57 @@ install_control() {
     CONFIG_PENDING=0
     enable_unit headscale
 }
-install_derp() { fetch_go; warn 'derper installed; caller must configure and start the relay'; }
+install_derp() {
+    apply_template derper.service
+    target="${TB_PREFIX}/etc/systemd/system/derper.service"
+    [ ! -L "${target}" ] || die "refusing configuration symlink: ${target}"
+    [ ! -e "${target}" ] || [ -f "${target}" ] || die "configuration is not a regular file: ${target}"
+    if [ -e "${target}" ] && ! cmp -s "${TMP}/derper.service" "${target}"; then
+        warn "configuration differs: ${target}"
+        [ "${FORCE}" = 1 ] || die 'configuration exists; use --force to replace it'
+    fi
+    cert="${DERP_CERT_DIR}/${DERP_HOSTNAME}.crt"
+    key="${DERP_CERT_DIR}/${DERP_HOSTNAME}.key"
+    [ -s "${cert}" ] && [ -s "${key}" ] || missing 'provide the DERP certificate and private key before installation'
+    install_tool openssl
+    openssl x509 -in "${cert}" -noout -checkend 0 > /dev/null || die 'invalid or expired DERP certificate'
+    # Go rejects legacy CN-only certificates even when OpenSSL accepts them
+    openssl x509 -in "${cert}" -noout -ext subjectAltName > "${TMP}/cert.san" || die 'invalid DERP certificate'
+    grep -q 'DNS:' "${TMP}/cert.san" || die 'DERP certificate requires a DNS subjectAltName'
+    openssl x509 -in "${cert}" -noout -checkhost "${DERP_HOSTNAME}" > /dev/null || die 'DERP certificate hostname mismatch'
+    openssl x509 -in "${cert}" -noout -pubkey > "${TMP}/cert.pub" || die 'cannot read DERP certificate'
+    openssl pkey -in "${key}" -passin pass: -pubout > "${TMP}/key.pub" 2>/dev/null || die 'invalid DERP private key'
+    cmp -s "${TMP}/cert.pub" "${TMP}/key.pub" || die 'DERP certificate and key do not match'
+    state="${TB_PREFIX}/var/lib/derper/derper.key"
+    [ ! -L "${state}" ] || die 'refusing DERP identity symlink'
+    [ ! -e "${state}" ] || { [ -f "${state}" ] && [ -s "${state}" ]; } || missing 'invalid DERP identity; state preserved'
+    if [ "${TB_OFFLINE}" != 1 ]; then
+        getent group derper >/dev/null || groupadd --system derper
+        id -u derper >/dev/null 2>&1 || useradd --system --gid derper --home-dir /var/lib/derper \
+            --no-create-home --shell /usr/sbin/nologin derper
+        chgrp derper "${cert}" "${key}"
+        chmod 640 "${cert}" "${key}"
+        if ! runuser -u derper -- test -r "${cert}" || ! runuser -u derper -- test -r "${key}"; then
+            die 'derper cannot read certificates; grant directory traversal and group read access'
+        fi
+        install -d -m 700 "${TB_PREFIX}/var/lib/derper"
+        chown derper:derper "${TB_PREFIX}/var/lib/derper"
+        if [ -e "${state}" ]; then chown derper:derper "${state}"; chmod 600 "${state}"; fi
+    fi
+    fetch_go
+    if [ "${TB_OFFLINE}" != 1 ] && command -v systemd-analyze >/dev/null 2>&1; then
+        systemd-analyze verify "${TMP}/derper.service" >&2 || die 'invalid derper service unit'
+    fi
+    if ! cmp -s "${TMP}/derper.service" "${target}"; then
+        install -d -m 755 "${TB_PREFIX}/etc/systemd/system"
+        STAGED=$(mktemp "${target}.XXXXXX")
+        install -m 644 "${TMP}/derper.service" "${STAGED}"
+        mv -f "${STAGED}" "${target}"
+        STAGED=''
+        CHANGED=1
+    fi
+    enable_unit derper
+}
 configure_forwarding() {
     [ "${ADVERTISE_EXIT_NODE:-false}" = true ] || return 0
     target="${TB_PREFIX}/etc/sysctl.d/99-tailbridge-exit-node.conf"

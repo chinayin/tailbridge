@@ -21,7 +21,7 @@ Headscale manages devices and access policies. Devices exchange WireGuard-encryp
 ## Modules
 
 - **`control` — Headscale:** device registration, discovery, policy distribution, and the management REST API
-- **`derp` — Independent relay:** forwards encrypted traffic when devices cannot connect directly; the installer builds `derper`, while certificates and service supervision are configured separately
+- **`derp` — Independent relay:** forwards encrypted traffic when devices cannot connect directly; the installer builds `derper` and configures its systemd service, using certificates you provide and renew
 - **`node` — Tailscale device:** joins the network and can optionally advertise itself as an exit node
 
 ## Getting started
@@ -45,20 +45,22 @@ Pass variables to `sudo env` after the pipe. They configure that installer run; 
 
 | Variable | Role | Default | Purpose |
 | --- | --- | --- | --- |
-| `SERVER_URL` | control / node | — | Required control URL, e.g. `https://tailbridge.example.net` |
-| `INSTALL_BASE_URL` | control | — | Required template root, e.g. `https://raw.githubusercontent.com/chinayin/tailbridge/main` |
+| `SERVER_URL` | control / derp / node | — | Required control URL, e.g. `https://tailbridge.example.net` |
+| `INSTALL_BASE_URL` | control / derp | — | Required template root, e.g. `https://raw.githubusercontent.com/chinayin/tailbridge/main` |
 | `BASE_DOMAIN` | control | — | Required MagicDNS domain, e.g. `tb.example.net` |
 | `TLS_HOSTNAME`, `ACME_EMAIL` | control | — | Hostname and contact email for automatic certificates |
 | `TLS_CERT_PATH`, `TLS_KEY_PATH` | control | — | Certificate and key paths when using file certificates |
 | `DERP_REGION_ID`, `DERP_REGION_CODE`, `DERP_REGION_NAME` | control | — | Required ID, code, and display name for the first relay region |
-| `DERP_NODE_NAME`, `DERP_HOSTNAME` | control | — | Required relay node name and service domain |
-| `DERP_PORT` | control | `443` | Relay port in the map; use `8443` when sharing the control server's IP |
+| `DERP_NODE_NAME` | control | — | Required relay node name |
+| `DERP_HOSTNAME` | control / derp | — | Required relay service domain |
+| `DERP_PORT` | control / derp | `443` | Relay map and listening port; use `8443` when sharing the control server's IP |
+| `DERP_CERT_DIR` | derp | `/etc/derper/certs` | Existing certificate directory containing `<DERP_HOSTNAME>.crt` and `.key` |
 | `DERP_IPV4` | control | — | Optional relay IPv4 address; leave blank to use DNS |
 | `NODE_AUTHKEY` | node | — | Registration key for a new device |
 | `NODE_HOSTNAME` | node | System hostname | Device name at first registration |
 | `ADVERTISE_EXIT_NODE` | node | `false` | Enable forwarding and advertise an exit; approval and access grants are separate |
 
-Choose either automatic or file certificates. `DERP_*` values configure the control plane's relay map; the relay process uses its own startup arguments. Full requirements, examples, and firewall ports are in the [installation guide](docs/INSTALL.md).
+Control supports automatic or file certificates; DERP requires file certificates. Use matching relay hostnames and ports for both roles. Full requirements, examples, and firewall ports are in the [installation guide](docs/INSTALL.md).
 
 ## Documentation
 

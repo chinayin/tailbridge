@@ -7,11 +7,23 @@
 ```bash
 sudo systemctl status headscale --no-pager
 sudo journalctl -u headscale -n 50 --no-pager
+sudo systemctl status derper --no-pager
+sudo journalctl -u derper -n 50 --no-pager
 sudo -u headscale headscale configtest
 curl -fsS https://tailbridge.example.net/health
 ```
 
 修改前保留旧配置，以服务用户校验后再重载或重启。自动证书的端口与 DNS 要求见[安装说明](INSTALL.md#安全组与防火墙)；监测证书到期和签发失败，保留 ACME 缓存。手动证书更新后重启对应服务。
+
+DERP 证书由外部工具续期。更新 `DERP_CERT_DIR` 中的同名 `.crt` / `.key` 后，恢复服务组读取权限并重启；以下使用[默认目录](INSTALL.md#derp-中继)，替换域名和证书来源：
+
+```bash
+sudo install -o root -g derper -m 644 /path/to/fullchain.pem /etc/derper/certs/tb-derp-hk-01.example.net.crt
+sudo install -o root -g derper -m 640 /path/to/privkey.pem /etc/derper/certs/tb-derp-hk-01.example.net.key
+sudo -u derper test -r /etc/derper/certs/tb-derp-hk-01.example.net.crt
+sudo -u derper test -r /etc/derper/certs/tb-derp-hk-01.example.net.key
+sudo systemctl restart derper
+```
 
 管理 API Key 的签发和轮换见 [REST 管理](API.md#认证)。UI 会话密钥单独轮换，不会自动撤销设备身份。
 

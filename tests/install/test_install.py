@@ -1,6 +1,7 @@
 """安装器的文件行为；外部系统只在命令边界替换，不连接真实服务。"""
 
 import json
+import configparser
 import os
 from pathlib import Path
 import shutil
@@ -218,10 +219,142 @@ class InstallTests(unittest.TestCase):
         self.assertIn('registration', result.stderr)
         self.assertFalse((self.prefix / 'var/lib/tailscale/tailscaled.state').exists())
 
-    def test_derp_needs_no_template_url_or_runtime_parameters(self):
-        self.run_install(role='derp', changes={'INSTALL_BASE_URL': '', 'SERVER_URL': '',
+    def test_derp_requires_service_inputs_but_no_map_fields(self):
+        for name in ('INSTALL_BASE_URL', 'SERVER_URL', 'DERP_HOSTNAME'):
+            with self.subTest(name=name):
+                self.run_install('--dry-run', role='derp', changes={name: ''}, expected=2)
+                self.assertFalse(self.prefix.exists())
+        self.run_install('--dry-run', role='derp', changes={
             'DERP_REGION_ID': '', 'DERP_REGION_CODE': '', 'DERP_REGION_NAME': '', 'DERP_NODE_NAME': ''})
-        self.assertFalse(self.config('derp.yaml').exists())
+        self.assertFalse(self.prefix.exists())
+
+    def derp_fixture(self):
+        certs = self.prefix / 'etc/derper/certs'
+        certs.mkdir(parents=True)
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                        '-keyout', str(certs / 'derp.example.test.key'),
+                        '-out', str(certs / 'derp.example.test.crt'), '-days', '1',
+                        '-subj', '/CN=derp.example.test', '-addext', 'subjectAltName=DNS:derp.example.test'],
+                       check=True, capture_output=True)
+        return {'DERP_CERT_DIR': str(certs)}
+
+    def derp_runtime(self):
+        changes = self.derp_fixture()
+        binary = self.prefix / 'usr/local/bin/derper'
+        binary.parent.mkdir(parents=True)
+        binary.write_text('#!/bin/sh\nprintf "%s\\n" 1.104.5-ERR-BuildInfo\n')
+        binary.chmod(0o755)
+        (self.prefix / 'run/systemd/system').mkdir(parents=True)
+        self.stub('id', 'print("123" if len(sys.argv)>2 else "0")')
+        self.stub('getent', 'print("derper:x:123:")')
+        self.stub('chown', 'pass')
+        self.stub('chgrp', 'pass')
+        self.stub('runuser', 'os.execvp(sys.argv[4], sys.argv[4:])')
+        self.stub('systemctl', '''
+with open(os.environ['TEST_SYSTEMCTL'], 'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
+if sys.argv[1]=='is-active': raise SystemExit(0 if os.environ.get('TEST_ACTIVE')=='1' else 3)
+''')
+        self.stub('curl', '''
+import shutil
+args=sys.argv[1:]; url=args[-1]
+if '/files/' not in url: raise SystemExit('unexpected binary download')
+shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], args[args.index('--output')+1])
+''')
+        return {**changes, 'TB_OFFLINE': '0', 'TEST_SYSTEMCTL': str(self.base / 'systemctl')}
+
+    def test_derp_service_preserves_identity_and_requires_force_for_changes(self):
+        changes = self.derp_fixture()
+        identity = self.prefix / 'var/lib/derper/derper.key'
+        identity.parent.mkdir(parents=True)
+        identity.write_bytes(b'original relay identity')
+        unit = self.prefix / 'etc/systemd/system/derper.service'
+        self.run_install(role='derp', changes=changes)
+        self.assertTrue(unit.is_file(), 'DERP installation must publish a service unit')
+        service = configparser.ConfigParser(interpolation=None)
+        service.read(unit)
+        self.assertEqual(service['Service']['User'], 'derper')
+        self.assertEqual(service['Service']['Restart'], 'on-failure')
+        self.assertEqual(service['Install']['WantedBy'], 'multi-user.target')
+        args = service['Service']['ExecStart']
+        for value in ('derp.example.test', ':8443', '-http-port=-1', '-certmode=manual',
+                      '-verify-client-url=https://control.example.test/verify',
+                      '-verify-client-url-fail-open=false', '/var/lib/derper/derper.key'):
+            self.assertIn(value, args)
+        previous = unit.read_bytes()
+        self.run_install(role='derp', changes=changes)
+        self.assertEqual(unit.read_bytes(), previous)
+        self.run_install(role='derp', changes={**changes, 'DERP_PORT': '443'}, expected=1)
+        self.assertEqual(unit.read_bytes(), previous)
+        self.run_install('--force', role='derp', changes={**changes, 'DERP_PORT': '443'})
+        self.assertIn(':443', unit.read_text())
+        self.assertEqual(identity.read_bytes(), b'original relay identity')
+        self.assertFalse(self.config().exists())
+
+    def test_derp_rejects_missing_wrong_host_and_mismatched_certificates_before_write(self):
+        changes = self.derp_fixture()
+        certs = Path(changes['DERP_CERT_DIR'])
+        key = certs / 'derp.example.test.key'
+        original = key.read_bytes()
+        key.unlink()
+        self.run_install(role='derp', changes=changes, expected=2)
+        key.write_bytes(original)
+        subprocess.run(['openssl', 'genrsa', '-out', str(key), '2048'], check=True, capture_output=True)
+        self.run_install(role='derp', changes=changes, expected=1)
+        key.write_bytes(original)
+        shutil.copyfile(key, certs / 'wrong.example.test.key')
+        shutil.copyfile(certs / 'derp.example.test.crt', certs / 'wrong.example.test.crt')
+        self.run_install(role='derp', changes={**changes, 'DERP_HOSTNAME': 'wrong.example.test'}, expected=1)
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                        '-keyout', str(key), '-out', str(certs / 'derp.example.test.crt'),
+                        '-days', '1', '-subj', '/CN=derp.example.test'], check=True, capture_output=True)
+        self.run_install(role='derp', changes=changes, expected=1)
+        self.assertFalse((self.prefix / 'etc/systemd/system/derper.service').exists())
+        self.assertFalse((self.prefix / 'usr/local/bin/derper').exists())
+
+    def test_derp_rejects_unit_expansions_and_invalid_ports(self):
+        cases = [('SERVER_URL', 'http://control.example.test'), ('SERVER_URL', 'https://a.test/%n'),
+                 ('DERP_HOSTNAME', 'example.test -dev'), ('DERP_HOSTNAME', '${PATH}'),
+                 ('DERP_CERT_DIR', '/tmp/%n'), ('DERP_CERT_DIR', '/tmp/$HOME'),
+                 ('DERP_CERT_DIR', 'relative'), ('DERP_PORT', '0'), ('DERP_PORT', '65536')]
+        for name, value in cases:
+            with self.subTest(name=name, value=value):
+                self.run_install('--dry-run', role='derp', changes={name: value}, expected=1)
+                self.assertFalse(self.prefix.exists())
+
+    def test_derp_enables_service_and_only_restarts_changed_configuration(self):
+        changes = self.derp_runtime()
+        self.run_install(role='derp', changes=changes)
+        calls = self.base / 'systemctl'
+        self.assertIn(['enable', '--now', 'derper'], [json.loads(line) for line in calls.read_text().splitlines()])
+        calls.unlink()
+        self.run_install(role='derp', changes={**changes, 'TEST_ACTIVE': '1'})
+        self.assertNotIn(['restart', 'derper'], [json.loads(line) for line in calls.read_text().splitlines()])
+        calls.unlink()
+        self.run_install('--force', role='derp', changes={**changes, 'TEST_ACTIVE': '1', 'DERP_PORT': '443'})
+        self.assertIn(['restart', 'derper'], [json.loads(line) for line in calls.read_text().splitlines()])
+
+    def test_derp_accepts_plain_version_without_rebuilding(self):
+        changes = self.derp_runtime()
+        (self.prefix / 'usr/local/bin/derper').write_text('#!/bin/sh\necho 1.104.5\n')
+        self.run_install(role='derp', changes=changes)
+
+    def test_templates_only_expand_parameters_for_the_selected_role(self):
+        changes = self.derp_fixture()
+        self.run_install(role='derp', changes={**changes, 'BASE_DOMAIN': 'ignored|value',
+                         'DERP_REGION_NAME': 'ignored|value'})
+        self.run_install(changes={'DERP_CERT_DIR': '/ignored|value'})
+        self.assertIn('server_url: "https://control.example.test"', self.config().read_text())
+
+    def test_derp_refuses_unreadable_service_certificate_without_replacing_unit(self):
+        changes = self.derp_runtime()
+        self.run_install(role='derp', changes=changes)
+        unit = self.prefix / 'etc/systemd/system/derper.service'
+        previous = unit.read_bytes()
+        (self.base / 'systemctl').unlink()
+        self.stub('runuser', 'raise SystemExit(1)')
+        self.run_install('--force', role='derp', changes={**changes, 'DERP_PORT': '443'}, expected=1)
+        self.assertEqual(unit.read_bytes(), previous)
+        self.assertFalse((self.base / 'systemctl').exists())
 
     def test_empty_existing_identity_is_rejected_before_daemon_start(self):
         state = self.prefix / 'var/lib/tailscale/tailscaled.state'
@@ -606,12 +739,19 @@ elif sys.argv[1:3] == ['policy', 'check'] and '--bypass-grpc-and-access-database
         self.assertEqual(identity.stat().st_mode & 0o777, 0o600)
 
     def test_derper_uses_official_go_download_metadata(self):
+        changes = self.derp_runtime()
+        binary = self.prefix / 'usr/local/bin/derper'
+        old_program = '#!/bin/sh\necho 0.0.0\n'
+        binary.write_text(old_program)
+        previous = binary.open('rb')
+        self.addCleanup(previous.close)
         self.stub('id', 'print("0")')
         self.stub('go', 'print("go version go0.0.0 linux/arm64")')
         self.stub('curl', '''
-import hashlib
+import hashlib, shutil
 args=sys.argv[1:]; out=Path(args[args.index('--output')+1]); url=args[-1]
-if url == 'https://go.dev/dl/?mode=json&include=all':
+if '/files/' in url: shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], out)
+elif url == 'https://go.dev/dl/?mode=json&include=all':
     out.write_text(json.dumps([{'version':'go1.27.4','files':[
         {'filename':'go1.27.4.linux-amd64.tar.gz','sha256':'a'*64},
         {'filename':'go1.27.4.linux-arm64.tar.gz','sha256':hashlib.sha256(b'archive').hexdigest()}]}]))
@@ -629,8 +769,9 @@ target.parent.mkdir(parents=True)
 code='import os,sys\\nfrom pathlib import Path\\nif sys.argv[1]=="version": print("go version go1.27.4 linux/arm64")\\nelse:\\n p=Path(os.environ["GOBIN"]); p.mkdir(); (p/"derper").write_text("built derper")\\n'
 target.write_text('#!'+sys.executable+'\\n'+code); target.chmod(0o755)
 ''')
-        self.run_install(role='derp', changes={'TB_OFFLINE': '0'})
+        self.run_install(role='derp', changes=changes)
         self.assertEqual((self.prefix / 'usr/local/bin/derper').read_text(), 'built derper')
+        self.assertEqual(previous.read(), old_program.encode(), 'running binary must be replaced atomically')
 
 
 if __name__ == '__main__':

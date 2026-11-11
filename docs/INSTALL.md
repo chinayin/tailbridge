@@ -12,9 +12,9 @@
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | sh -s -- --help
 ```
 
-自托管或固定版本时，将安装器下载地址和 control 的 `INSTALL_BASE_URL` 指向同一份源码；该地址下须同时包含 `install.sh` 和 `files/`。
+自托管或固定版本时，将安装器下载地址和 control / derp 的 `INSTALL_BASE_URL` 指向同一份源码；该地址下须同时包含 `install.sh` 和 `files/`。
 
-安装需要 root 权限，以写入系统目录、安装包和管理服务。示例中的 `sudo` 供有管理员权限的普通用户使用；已登录 root 时去掉 `sudo` 即可，`--dry-run` 不要求 root。Headscale 运行时使用官方服务账户 `headscale`，与安装账户分开。
+安装需要 root 权限，以写入系统目录、安装包和管理服务。示例中的 `sudo` 供有管理员权限的普通用户使用；已登录 root 时去掉 `sudo` 即可，`--dry-run` 不要求 root。Headscale 和 derper 分别使用服务账户 `headscale`、`derper`，与安装账户分开。
 
 Ubuntu 支持两种传参方式：`env KEY=value command` 仅给该命令传变量；`export KEY=value` 给当前 shell 及后续子进程使用，均不自动持久化。`sudo env ...` 是先取得权限再设置变量；普通用户的 `export` 不保证能穿过 sudo，建议按示例显式传参。[env](https://manpages.ubuntu.com/manpages/noble/man1/env.1.html) · [sudo](https://manpages.ubuntu.com/manpages/noble/man8/sudo.8.html)
 
@@ -93,20 +93,40 @@ curl -fsS https://tailbridge.example.net/health
 
 ## derp 中继
 
-### 配置与安装
+### 环境变量
+
+| 变量 | 要求 | 默认值 | 用途与格式 |
+| --- | --- | --- | --- |
+| `INSTALL_BASE_URL` | 必填 | 无 | 与安装器同源的模板根 URL，从其 `/files/` 下载服务模板 |
+| `SERVER_URL` | 必填 | 无 | 控制面的 HTTPS URL，用于请求 `/verify` 校验接入 |
+| `DERP_HOSTNAME` | 必填 | 无 | 中继服务域名，与 control 的 Map 一致；不含协议、端口或路径 |
+| `DERP_PORT` | 可选 | `443` | 中继实际 TLS 监听端口，整数 `1–65535`；与控制面共用 IP 时填 `8443` |
+| `DERP_CERT_DIR` | 可选 | `/etc/derper/certs` | 已有 PEM 证书目录的绝对路径，文件名必须为 `<DERP_HOSTNAME>.crt` 和 `<DERP_HOSTNAME>.key` |
+
+只使用文件证书，安装前准备包含中继域名 DNS SAN 的证书链和私钥。默认路径例如 `/etc/derper/certs/tb-derp-hk-01.example.net.crt` 和同名 `.key`；目录及父目录须允许 `derper` 遍历，可设为 `755` 或单独授权。安装器授予 `derper` 组读取证书和私钥，并检查该账户能读取两者。
+
+### 安装与检查
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo sh -s -- --role derp
+  sudo env INSTALL_BASE_URL=https://raw.githubusercontent.com/chinayin/tailbridge/main \
+    SERVER_URL=https://tailbridge.example.net \
+    DERP_HOSTNAME=tb-derp-hk-01.example.net \
+    sh -s -- --role derp --dry-run
 ```
 
-此角色只构建 `/usr/local/bin/derper`，不读取 control 的 ENV，也不创建常驻服务。部署方负责服务账户、进程托管、开机恢复、身份和证书保存。启动时设置：
+确认计划后去掉 `--dry-run` 执行。同机部署时增加 `DERP_PORT=8443`，control 的 Map 也须填写相同端口；修改 Map 不会更改中继监听。
 
-- `-hostname`、`-a`：与 control 中填写的 `DERP_HOSTNAME`、`DERP_PORT` 对应。修改 Map 不会修改中继的实际监听。
-- `-verify-client-url=https://tailbridge.example.net/verify`、`-verify-client-url-fail-open=false`：通过控制面校验接入；入口取自同一个 `SERVER_URL`。
-- `-http-port=-1`：关闭 HTTP 监听。独立主机使用 443 时，可用 `-certmode=letsencrypt` 通过 TLS-ALPN-01 自动签发和续期，持久化 `-certdir` 指定的缓存目录。
-- 非 443 端口（包括独立主机的 8443）须设置 `-certmode=manual`、`-certdir=<证书目录>` 并自行续期，否则当前 derper 会提供 HTTP。[上游说明](https://github.com/tailscale/tailscale/blob/v1.104.5/cmd/derper/derper.go#L56)
-- 同机共享 IP 时，Headscale 使用 443，中继使用 8443；不同域名不能让两个独立进程共享同一 IP 的 443。
+安装器构建 `/usr/local/bin/derper`，将 [服务模板](../files/derper.service) 渲染为 `/etc/systemd/system/derper.service`，以 `derper` 用户和组运行。服务开机启动、失败自动重启；身份保存在 `/var/lib/derper/derper.key`，重跑和升级保留该文件，版本匹配时复用二进制。已有服务配置不同时须显式使用 `--force`。
+
+服务关闭 HTTP 80、启用 UDP 3478 STUN，使用手动证书并向 `${SERVER_URL}/verify` 校验接入，固定 `-verify-client-url-fail-open=false`。无 systemd 时仍准备服务文件、账户和状态目录，由调用方按服务中的参数启动进程。
+
+```bash
+sudo systemctl status derper --no-pager
+sudo journalctl -u derper -n 50 --no-pager
+```
+
+证书签发和续期由部署方负责，可使用外部工具通过 DNS-01 完成，无需开放 80。Headscale 的证书缓存不会自动供 derper 使用；续期后的权限和重启命令见[运维](OPERATIONS.md#服务与证书)。
 
 ### 安全组与防火墙
 
@@ -115,32 +135,14 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 | 入站 | TCP `DERP_PORT`：默认 443，同机 8443 | 公网节点的 DERP 连接；与启动参数 `-a` 一致 |
 | 入站 | UDP 3478 | 公网节点的 STUN 探测 |
 | 出站 | TCP 443 | 请求 `SERVER_URL/verify`；URL 有显式端口时使用该端口，如 `:9443` 对应 9443 |
-| 出站 | TCP 443 | 使用自动证书时访问 ACME 服务 |
 
-独立中继开放 TCP 443、UDP 3478；与控制面同机时合计开放 TCP 443 / 8443、UDP 3478。中继使用自己的证书，Map 保持 `canport80: false`；自动证书的 DNS 与 443 可达要求同控制面。[derper 启动参数与监听实现](https://github.com/tailscale/tailscale/blob/v1.104.5/cmd/derper/derper.go)
+独立中继开放 TCP 443、UDP 3478；与控制面同机时合计开放 TCP 443 / 8443、UDP 3478。中继域名须在入网前可解析，Map 保持 `canport80: false`。外部证书工具的出站要求另行配置。
 
 地域 ID 和节点名称在控制面的 Map 中维护，见[节点命名](NODE_NAMING.md#derp-地域)。
 
 ### 与控制面同机
 
-将 `tailbridge.example.net` 和 `tb-derp-hk-01.example.net` 解析到同一 IP。按上文安装 control，设置 `DERP_PORT=8443`，再在同机安装 derp。
-
-先把中继的 PEM 证书链和私钥放到 `/etc/derper/certs/tb-derp-hk-01.example.net.crt`、同名 `.key`，私钥限制为服务账户可读。证书须覆盖中继域名，可由外部证书工具通过 DNS-01 签发和续期，无需开放 80；Headscale 的证书缓存不会自动供 derper 使用。前台启动检查：
-
-```bash
-sudo install -d -m 700 /var/lib/derper
-sudo env SERVER_URL=https://tailbridge.example.net \
-  DERP_HOSTNAME=tb-derp-hk-01.example.net DERP_PORT=8443 \
-  sh -c 'exec /usr/local/bin/derper \
-    -hostname="${DERP_HOSTNAME}" -a=":${DERP_PORT}" \
-    -http-port=-1 -stun=true -stun-port=3478 \
-    -certmode=manual -certdir=/etc/derper/certs \
-    -c=/var/lib/derper/derper.key \
-    -verify-client-url="${SERVER_URL%/}/verify" \
-    -verify-client-url-fail-open=false'
-```
-
-这里用同名 ENV 组装 derper 参数；安装器的 `DERP_PORT` 只写 Map，不会替另一进程改监听。确认可用后由 systemd 等托管同一命令，保留 `/var/lib/derper/` 和证书；前台命令本身不提供开机启动。
+将 `tailbridge.example.net` 和 `tb-derp-hk-01.example.net` 解析到同一 IP。control 和 derp 两次安装均设置 `DERP_PORT=8443`，共用相同的 `SERVER_URL` 和 `DERP_HOSTNAME`。Headscale 监听 443，derper 监听 8443；不同域名不能让两个独立进程共享同一 IP 的 443。
 
 ## node 设备
 
@@ -193,7 +195,7 @@ Headplane 不属于上述安装角色，控制地址、管理 API Key 和入口�
 ## 共用选项与验证
 
 - `--dry-run`：显示计划，不下载、写入或启动；不验证 DNS、网络和证书有效性。
-- `--force`：允许覆盖不同配置，会重置已有策略和中继列表，使用前先[备份](OPERATIONS.md#备份与升级)；不清除数据库、密钥或节点身份。
+- `--force`：允许覆盖所选角色的不同配置；control 会重置已有策略和中继列表，derp 会覆盖服务配置，使用前先[备份](OPERATIONS.md#备份与升级)；不清除数据库、密钥或节点身份。
 - `--headscale-version X.Y.Z`、`--tailscale-version X.Y.Z`：覆盖默认版本，后者同时用于 derper；不带 `v`。默认值见[脚本顶部](../install.sh)，Go 由维护者更新。
 - `--version` 查看安装器版本，`--help` 查看帮助。退出码 `0` 表示所选阶段完成，`1` 表示参数或运行错误，`2` 表示前提不足；无 systemd 的成功不代表服务已启动。
 

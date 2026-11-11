@@ -84,6 +84,7 @@ services:
       <<: *environment
       DERP_HOSTNAME: ${DERP_HOSTNAME}
       DERP_PORT: ${DERP_PORT}
+      DERP_CERT_DIR: /etc/derper/certs
       SSL_CERT_FILE: /etc/tailbridge/ca.crt
     volumes:
       - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro

@@ -31,10 +31,16 @@ case "${role}" in
         exec bash /app/node.sh
         ;;
     derp)
-        # Build derper in fresh containers; reuse the binary on restart
-        if ! command -v derper >/dev/null 2>&1; then install_component; fi
-        exec derper -hostname="${DERP_HOSTNAME}" -a=":${DERP_PORT}" \
-            -http-port=-1 -stun=true -stun-port=3478 -certmode=manual -certdir=/run/secrets/derper \
+        cert_dir="${DERP_CERT_DIR:-/etc/derper/certs}"
+        # Copy read-only secrets before the installer grants service access
+        install -d -m 755 "${cert_dir}"
+        install -m 644 "/run/secrets/derper/${DERP_HOSTNAME}.crt" "${cert_dir}/${DERP_HOSTNAME}.crt"
+        install -m 600 "/run/secrets/derper/${DERP_HOSTNAME}.key" "${cert_dir}/${DERP_HOSTNAME}.key"
+        # Reconcile the account and service on restart; matching binaries are reused
+        install_component
+        exec setpriv --reuid=derper --regid=derper --init-groups \
+            derper -hostname="${DERP_HOSTNAME}" -a=":${DERP_PORT:-443}" \
+            -http-port=-1 -stun=true -stun-port=3478 -certmode=manual -certdir="${cert_dir}" \
             -c=/var/lib/derper/derper.key -verify-client-url="${SERVER_URL%/}/verify" \
             -verify-client-url-fail-open=false
         ;;
