@@ -24,13 +24,13 @@ control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.c
 
 ### 下载代理
 
-需要代理时，同时传给入口 `curl` 和安装器；`PROXY` 是本项目的安装输入，外层 `curl` 使用 `-x`：
+通过 `sudo env` 一次传入配置，让下载和安装共享环境变量；`curl` 使用 `-x` 读取代理：
 
 ```bash
-PROXY=http://127.0.0.1:7890
-curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env PROXY="$PROXY" SERVER_URL=https://tailbridge.example.net \
-    NODE_AUTHKEY='<首次注册密钥>' sh -s -- --role node
+sudo env PROXY=http://127.0.0.1:7890 \
+  SERVER_URL=https://tailbridge.example.net NODE_AUTHKEY='<首次注册密钥>' \
+  sh -c 'curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+         sh -s -- --role node'
 ```
 
 三个角色均支持 `PROXY=http(s)://[用户:密码@]主机[:端口]`，作用于 curl、apt 和 Go 下载，不写入系统或服务配置。`127.0.0.1` 指执行安装的目标机；容器或远程服务器须使用它能访问的代理地址。
