@@ -41,12 +41,12 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 
 ## 环境变量
 
-变量放在管道后的 `sudo env` 中，仅作用于本次安装；安装器不自动读取 `.env`。
+变量放在管道后的 `sudo env` 中，安装器将服务配置写入文件，不自动读取 `.env`。服务读取方式见[配置持久化](docs/INSTALL.md#配置持久化)。
 
 | 变量 | 角色 | 默认值 | 用途 |
 | --- | --- | --- | --- |
 | `SERVER_URL` | control / derp / node | — | 必填控制入口，如 `https://tailbridge.example.net` |
-| `INSTALL_BASE_URL` | control / derp | — | 必填模板根地址，如 `https://raw.githubusercontent.com/chinayin/tailbridge/main` |
+| `INSTALL_BASE_URL` | control / derp | 本仓库 `main` | 可选模板根地址，仅镜像或固定源码版本时覆盖，见[安装说明](docs/INSTALL.md#共用准备) |
 | `BASE_DOMAIN` | control | — | 必填 MagicDNS 尾网域，如 `tb.example.net` |
 | `TLS_HOSTNAME`、`ACME_EMAIL` | control | — | 自动证书的域名和联系邮箱 |
 | `TLS_CERT_PATH`、`TLS_KEY_PATH` | control | — | 文件证书模式的证书和私钥路径 |

@@ -14,6 +14,7 @@ from settings import load_config, PROJECT_ROOT, ROOT
 
 HOSTNAME = "derp.service.test"
 CERT_DIR = "/etc/derper/certs"
+CONFIG = "/etc/derper/derper.conf"
 UNIT = "/etc/systemd/system/derper.service"
 IDENTITY = "/var/lib/derper/derper.key"
 PROBE = r'''
@@ -107,7 +108,7 @@ class ServiceTest:
         return int(self.exec("systemctl", "show", "derper", "--property=MainPID", "--value").stdout)
 
     def state(self):
-        hashes = self.exec("sha256sum", UNIT, IDENTITY, "/usr/local/bin/derper").stdout
+        hashes = self.exec("sha256sum", CONFIG, UNIT, IDENTITY, "/usr/local/bin/derper").stdout
         return self.pid(), hashes
 
     def probe(self, port, closed_port):
@@ -121,6 +122,14 @@ class ServiceTest:
         uid = self.exec("id", "-u", "derper").stdout.strip()
         owner = self.exec("stat", "-c", "%u", f"/proc/{self.pid()}").stdout.strip()
         require(uid == owner and uid != "0", "DERP is not running as the derper account")
+        arguments = self.exec("python3", "-c", "from pathlib import Path; import sys; "
+                              "print(Path(sys.argv[1]).read_bytes().decode().replace(chr(0), chr(10)))",
+                              f"/proc/{self.pid()}/cmdline").stdout.splitlines()
+        for argument in (f"-hostname={HOSTNAME}", f"-a=:{port}", "-http-port=-1", "-stun=true",
+                         "-stun-port=3478", "-certmode=manual", f"-certdir={CERT_DIR}", f"-c={IDENTITY}",
+                         "-verify-client-url=https://control.example.test/verify",
+                         "-verify-client-url-fail-open=false"):
+            require(argument in arguments, f"Missing runtime argument: {argument}")
 
     def reject(self, label, expected_error, **options):
         previous = self.state()
@@ -138,11 +147,6 @@ class ServiceTest:
         self.install()
         self.active()
         identity = self.exec("sha256sum", IDENTITY).stdout
-        unit = self.exec("cat", UNIT).stdout
-        for argument in ("-http-port=-1", "-certmode=manual", "-stun-port=3478",
-                         "-verify-client-url=https://control.example.test/verify",
-                         "-verify-client-url-fail-open=false"):
-            require(argument in unit, f"Missing service setting: {argument}")
         passed("systemd enables non-root DERP with TLS 443, STUN 3478 and no TCP 80")
 
         previous = self.state()
@@ -165,22 +169,35 @@ class ServiceTest:
         require(self.exec("sha256sum", IDENTITY).stdout == identity, "Port change replaced the DERP identity")
         passed("--force changes TLS to 8443 and closes 443 while preserving identity")
 
+        unit = self.exec("sha256sum", UNIT).stdout
+        self.exec("python3", "-c", "from pathlib import Path; import sys; "
+                  "path = Path(sys.argv[1]); text = path.read_text(); "
+                  "assert text.count('DERP_PORT=\"8443\"') == 1; "
+                  "path.write_text(text.replace('DERP_PORT=\"8443\"', 'DERP_PORT=\"9443\"'))", CONFIG)
+        self.exec("env", "-i", "/usr/bin/systemctl", "restart", "derper")
+        self.active(9443, 8443)
+        require(self.exec("sha256sum", UNIT).stdout == unit, "Configuration edit changed the service unit")
+        require(self.exec("sha256sum", IDENTITY).stdout == identity, "Configuration edit replaced the DERP identity")
+        configuration = self.exec("sha256sum", CONFIG).stdout
+        passed("configuration alone changes TLS to 9443 after restart without installer or shell environment")
+
         previous_pid = self.pid()
         self.exec("systemctl", "kill", "--signal=KILL", "--kill-whom=main", "derper")
         self.wait(lambda: self.pid() not in {0, previous_pid}, "automatic DERP restart")
-        self.active(8443, 443)
+        self.active(9443, 8443)
         require(self.exec("sha256sum", IDENTITY).stdout == identity, "Crash recovery replaced the DERP identity")
         passed("systemd restarts a killed process with the same DERP identity")
 
         run(["docker", "restart", "--time", "10", self.container], timeout=30)
         self.boot()
-        self.active(8443, 443)
+        self.active(9443, 8443)
         require(self.exec("sha256sum", IDENTITY).stdout == identity, "Container restart replaced the DERP identity")
+        require(self.exec("sha256sum", CONFIG).stdout == configuration, "Container restart changed the configuration")
         self.templates()
         previous = self.state()
-        self.install(port=8443)
+        self.install(port=9443)
         require(self.state() == previous, "Installation after boot restarted DERP or replaced its state")
-        passed("container boot starts enabled DERP and preserves identity and idempotence")
+        passed("container boot preserves edited configuration, identity and installation idempotence")
 
 
 def main():

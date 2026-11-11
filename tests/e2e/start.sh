@@ -38,9 +38,12 @@ case "${role}" in
         install -m 600 "/run/secrets/derper/${DERP_HOSTNAME}.key" "${cert_dir}/${DERP_HOSTNAME}.key"
         # Reconcile the account and service on restart; matching binaries are reused
         install_component
+        # Read the persisted service settings after installation
+        # shellcheck disable=SC1091
+        source /etc/derper/derper.conf
         exec setpriv --reuid=derper --regid=derper --init-groups \
-            derper -hostname="${DERP_HOSTNAME}" -a=":${DERP_PORT:-443}" \
-            -http-port=-1 -stun=true -stun-port=3478 -certmode=manual -certdir="${cert_dir}" \
+            derper -hostname="${DERP_HOSTNAME}" -a=":${DERP_PORT}" \
+            -http-port=-1 -stun=true -stun-port=3478 -certmode=manual -certdir="${DERP_CERT_DIR}" \
             -c=/var/lib/derper/derper.key -verify-client-url="${SERVER_URL%/}/verify" \
             -verify-client-url-fail-open=false
         ;;

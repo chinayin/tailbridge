@@ -197,6 +197,18 @@ class InstallTests(unittest.TestCase):
         self.assertIn('go1.27.4.linux-arm64.tar.gz', result.stderr)
         self.run_install('--dry-run', '--go-version', '1.27.3', role='derp', expected=1)
 
+    def test_template_url_defaults_to_repository_and_accepts_override(self):
+        self.env.pop('INSTALL_BASE_URL')
+        default = 'https://raw.githubusercontent.com/chinayin/tailbridge/main'
+        for role in ('control', 'derp'):
+            for changes, expected in (({}, default), ({'INSTALL_BASE_URL': ''}, default),
+                                      ({'INSTALL_BASE_URL': 'https://mirror.example.test/v1/'},
+                                       'https://mirror.example.test/v1')):
+                with self.subTest(role=role, changes=changes):
+                    result = self.run_install('--dry-run', role=role, changes=changes)
+                    self.assertIn(expected + '/files/', result.stderr)
+                    self.assertFalse(self.prefix.exists())
+
     def test_installer_version_requires_no_role_platform_or_configuration(self):
         self.stub('uname', 'raise SystemExit("version must not inspect the platform")')
         result = subprocess.run(['sh', str(ROOT / 'install.sh'), '--version'],
@@ -220,7 +232,7 @@ class InstallTests(unittest.TestCase):
         self.assertFalse((self.prefix / 'var/lib/tailscale/tailscaled.state').exists())
 
     def test_derp_requires_service_inputs_but_no_map_fields(self):
-        for name in ('INSTALL_BASE_URL', 'SERVER_URL', 'DERP_HOSTNAME'):
+        for name in ('SERVER_URL', 'DERP_HOSTNAME'):
             with self.subTest(name=name):
                 self.run_install('--dry-run', role='derp', changes={name: ''}, expected=2)
                 self.assertFalse(self.prefix.exists())
@@ -264,6 +276,9 @@ shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], args
 
     def test_derp_service_preserves_identity_and_requires_force_for_changes(self):
         changes = self.derp_fixture()
+        directory = Path(changes['DERP_CERT_DIR'])
+        changes['DERP_CERT_DIR'] = str(directory.with_name('certs with spaces'))
+        directory.rename(changes['DERP_CERT_DIR'])
         identity = self.prefix / 'var/lib/derper/derper.key'
         identity.parent.mkdir(parents=True)
         identity.write_bytes(b'original relay identity')
@@ -274,21 +289,91 @@ shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], args
         service.read(unit)
         self.assertEqual(service['Service']['User'], 'derper')
         self.assertEqual(service['Service']['Restart'], 'on-failure')
+        self.assertEqual(service['Service']['EnvironmentFile'], '/etc/derper/derper.conf')
         self.assertEqual(service['Install']['WantedBy'], 'multi-user.target')
         args = service['Service']['ExecStart']
-        for value in ('derp.example.test', ':8443', '-http-port=-1', '-certmode=manual',
-                      '-verify-client-url=https://control.example.test/verify',
+        for value in ('${DERP_HOSTNAME}', ':${DERP_PORT}', '-http-port=-1', '-certmode=manual',
+                      '-verify-client-url=${SERVER_URL}/verify',
                       '-verify-client-url-fail-open=false', '/var/lib/derper/derper.key'):
             self.assertIn(value, args)
+        config = self.prefix / 'etc/derper/derper.conf'
+        persisted = subprocess.run(['sh', '-c', '. "$1"; printf "%s\\n" "$SERVER_URL" '
+                                   '"$DERP_HOSTNAME" "$DERP_PORT" "$DERP_CERT_DIR"',
+                                   'sh', str(config)], env={'PATH': os.environ['PATH']},
+                                  text=True, capture_output=True, check=True)
+        self.assertEqual(persisted.stdout.splitlines(), ['https://control.example.test',
+                         'derp.example.test', '8443', changes['DERP_CERT_DIR']])
+        self.assertEqual(config.stat().st_mode & 0o777, 0o644)
+        previous_config = config.read_bytes()
         previous = unit.read_bytes()
         self.run_install(role='derp', changes=changes)
         self.assertEqual(unit.read_bytes(), previous)
+        self.assertEqual(config.read_bytes(), previous_config)
         self.run_install(role='derp', changes={**changes, 'DERP_PORT': '443'}, expected=1)
         self.assertEqual(unit.read_bytes(), previous)
+        self.assertEqual(config.read_bytes(), previous_config)
         self.run_install('--force', role='derp', changes={**changes, 'DERP_PORT': '443'})
-        self.assertIn(':443', unit.read_text())
+        self.assertEqual(unit.read_bytes(), previous)
+        self.assertIn('DERP_PORT="443"', config.read_text())
         self.assertEqual(identity.read_bytes(), b'original relay identity')
         self.assertFalse(self.config().exists())
+
+    def test_derp_rejects_unsafe_or_modified_configuration_targets(self):
+        changes = self.derp_fixture()
+        self.run_install(role='derp', changes=changes)
+        targets = [self.prefix / 'etc/derper/derper.conf',
+                   self.prefix / 'etc/systemd/system/derper.service']
+        original = {p: p.read_bytes() for p in targets}
+        for path in targets:
+            with self.subTest(path=path):
+                path.write_bytes(original[path] + b'\n# local change\n')
+                result = self.run_install(role='derp', changes=changes, expected=1)
+                self.assertIn('--force', result.stderr)
+                self.assertEqual(path.read_bytes(), original[path] + b'\n# local change\n')
+                path.unlink()
+                path.symlink_to(self.base / 'absent')
+                self.run_install('--force', role='derp', changes=changes, expected=1)
+                self.assertTrue(path.is_symlink())
+                path.unlink()
+                path.mkdir()
+                self.run_install('--force', role='derp', changes=changes, expected=1)
+                self.assertTrue(path.is_dir())
+                path.rmdir()
+                path.write_bytes(original[path])
+                for target in targets:
+                    self.assertEqual(target.read_bytes(), original[target])
+
+    def fail_derp_unit_publish(self):
+        self.stub('mv', '''
+target = Path(sys.argv[-1])
+marker = Path(os.environ['TEST_FAILED'])
+if target.name == 'derper.service' and not marker.exists():
+    marker.touch()
+    raise SystemExit(1)
+os.execv('/bin/mv', ['/bin/mv', *sys.argv[1:]])
+''')
+        return {'TEST_FAILED': str(self.base / 'failed')}
+
+    def test_partial_derp_write_restores_configuration_and_permissions(self):
+        changes = self.derp_fixture()
+        self.run_install(role='derp', changes=changes)
+        config = self.prefix / 'etc/derper/derper.conf'
+        unit = self.prefix / 'etc/systemd/system/derper.service'
+        config.chmod(0o600)
+        unit.write_bytes(unit.read_bytes() + b'\n# local unit\n')
+        unit.chmod(0o640)
+        originals = {p: (p.read_bytes(), p.stat().st_mode & 0o777) for p in (config, unit)}
+        self.run_install('--force', role='derp', expected=1,
+                         changes={**changes, **self.fail_derp_unit_publish(), 'DERP_PORT': '443'})
+        for path, (content, mode) in originals.items():
+            self.assertEqual(path.read_bytes(), content)
+            self.assertEqual(path.stat().st_mode & 0o777, mode)
+
+    def test_first_derp_write_failure_removes_new_configuration(self):
+        changes = {**self.derp_fixture(), **self.fail_derp_unit_publish()}
+        self.run_install(role='derp', changes=changes, expected=1)
+        self.assertFalse((self.prefix / 'etc/derper/derper.conf').exists())
+        self.assertFalse((self.prefix / 'etc/systemd/system/derper.service').exists())
 
     def test_derp_rejects_missing_wrong_host_and_mismatched_certificates_before_write(self):
         changes = self.derp_fixture()
@@ -315,6 +400,7 @@ shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], args
         cases = [('SERVER_URL', 'http://control.example.test'), ('SERVER_URL', 'https://a.test/%n'),
                  ('DERP_HOSTNAME', 'example.test -dev'), ('DERP_HOSTNAME', '${PATH}'),
                  ('DERP_CERT_DIR', '/tmp/%n'), ('DERP_CERT_DIR', '/tmp/$HOME'),
+                 ('DERP_CERT_DIR', '/tmp/`id`'),
                  ('DERP_CERT_DIR', 'relative'), ('DERP_PORT', '0'), ('DERP_PORT', '65536')]
         for name, value in cases:
             with self.subTest(name=name, value=value):
@@ -349,11 +435,12 @@ shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], args
         changes = self.derp_runtime()
         self.run_install(role='derp', changes=changes)
         unit = self.prefix / 'etc/systemd/system/derper.service'
-        previous = unit.read_bytes()
+        config = self.prefix / 'etc/derper/derper.conf'
+        previous = {p: p.read_bytes() for p in (unit, config)}
         (self.base / 'systemctl').unlink()
         self.stub('runuser', 'raise SystemExit(1)')
         self.run_install('--force', role='derp', changes={**changes, 'DERP_PORT': '443'}, expected=1)
-        self.assertEqual(unit.read_bytes(), previous)
+        self.assertEqual({p: p.read_bytes() for p in (unit, config)}, previous)
         self.assertFalse((self.base / 'systemctl').exists())
 
     def test_empty_existing_identity_is_rejected_before_daemon_start(self):

@@ -41,12 +41,12 @@ Replace the URL and key with your own. New devices require access grants before 
 
 ## Environment variables
 
-Pass variables to `sudo env` after the pipe. They configure that installer run; `.env` files are not loaded automatically.
+Pass variables to `sudo env` after the pipe. The installer writes service configuration to disk; `.env` files are not loaded automatically. See [persistent configuration](docs/INSTALL.md#配置持久化).
 
 | Variable | Role | Default | Purpose |
 | --- | --- | --- | --- |
 | `SERVER_URL` | control / derp / node | — | Required control URL, e.g. `https://tailbridge.example.net` |
-| `INSTALL_BASE_URL` | control / derp | — | Required template root, e.g. `https://raw.githubusercontent.com/chinayin/tailbridge/main` |
+| `INSTALL_BASE_URL` | control / derp | This repository's `main` | Optional template root override for a mirror or pinned source; see [installation](docs/INSTALL.md#共用准备) |
 | `BASE_DOMAIN` | control | — | Required MagicDNS domain, e.g. `tb.example.net` |
 | `TLS_HOSTNAME`, `ACME_EMAIL` | control | — | Hostname and contact email for automatic certificates |
 | `TLS_CERT_PATH`, `TLS_KEY_PATH` | control | — | Certificate and key paths when using file certificates |

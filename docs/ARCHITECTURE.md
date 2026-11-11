@@ -36,7 +36,7 @@ flowchart LR
 
 ## 部署与文件
 
-生产目标是 Ubuntu 26.04。根目录 `install.sh` 安装官方组件，`files/` 存完整配置模板。control、node 使用官方 systemd 单元；derp 使用项目提供的 `derper.service`，以专用账户运行。部署方负责准备和续期中继证书，见[安装说明](INSTALL.md#derp-中继)。
+生产目标是 Ubuntu 26.04。根目录 `install.sh` 安装官方组件，`files/` 存配置模板与服务文件。control、node 使用官方 systemd 单元；derp 使用项目提供的 `derper.service`，以专用账户运行，读取方式见[配置持久化](INSTALL.md#配置持久化)。部署方负责准备和续期中继证书，见[安装说明](INSTALL.md#derp-中继)。
 
 | 内容 | 位置 |
 | --- | --- |
@@ -44,6 +44,6 @@ flowchart LR
 | E2E 编排与测试 | `tests/e2e/` |
 | 本机环境、凭据与报告 | 忽略的 `local/` |
 | 控制面配置 / 状态 | `/etc/headscale/` / `/var/lib/headscale/` |
-| 中继服务 / 身份 | `/etc/systemd/system/derper.service` / `/var/lib/derper/derper.key` |
+| 中继配置 / 身份 | `/etc/derper/derper.conf` / `/var/lib/derper/derper.key` |
 
 本机 E2E 用 Compose 在 Ubuntu 容器中执行同一安装器。`client-a`、`client-b`、`exit` 是测试场景别名；`probe` 和 `httpbin` 提供普通网络及模拟外网对照。测试范围与报告位置见 [E2E 说明](E2E_TEST_GUIDE.md#报告与验证范围)。

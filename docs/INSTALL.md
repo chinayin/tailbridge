@@ -12,17 +12,39 @@
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | sh -s -- --help
 ```
 
-自托管或固定版本时，将安装器下载地址和 control / derp 的 `INSTALL_BASE_URL` 指向同一份源码；该地址下须同时包含 `install.sh` 和 `files/`。
+control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.com/chinayin/tailbridge/main`，省略或空值均使用默认值。仅镜像、自托管或固定分支 / tag 时覆盖，并让安装器下载地址与模板根地址指向同一份源码；该地址下须同时包含 `install.sh` 和 `files/`。`curl | sh` 不会将下载 URL 传给脚本，不能自动推导镜像地址。
 
 安装需要 root 权限，以写入系统目录、安装包和管理服务。示例中的 `sudo` 供有管理员权限的普通用户使用；已登录 root 时去掉 `sudo` 即可，`--dry-run` 不要求 root。Headscale 和 derper 分别使用服务账户 `headscale`、`derper`，与安装账户分开。
 
-Ubuntu 支持两种传参方式：`env KEY=value command` 仅给该命令传变量；`export KEY=value` 给当前 shell 及后续子进程使用，均不自动持久化。`sudo env ...` 是先取得权限再设置变量；普通用户的 `export` 不保证能穿过 sudo，建议按示例显式传参。[env](https://manpages.ubuntu.com/manpages/noble/man1/env.1.html) · [sudo](https://manpages.ubuntu.com/manpages/noble/man8/sudo.8.html)
+`env KEY=value command` 仅给该命令传变量；`export KEY=value` 给当前 shell 及后续子进程使用。两者都可提供安装输入，安装器将运行所需值写入配置文件，服务之后独立读取，见[配置持久化](#配置持久化)。普通用户的 `export` 不保证能穿过 sudo，建议使用示例中的 `sudo env ...`。[env](https://manpages.ubuntu.com/manpages/noble/man1/env.1.html) · [sudo](https://manpages.ubuntu.com/manpages/noble/man8/sudo.8.html)
 
 目标机需能解析 DNS，并访问安装目录、系统软件源和官方组件源。限制出站时，允许到所用 DNS 的 UDP / TCP 53，以及下载源的 TCP 443 / 80。控制和中继域名必须在入网前可解析，并位于尾网域之外。
 
 云安全组和主机防火墙都需放行对应流量。下文“公网”指 IPv4 `0.0.0.0/0`；提供 IPv6 服务时另配 `::/0`。固定设备来源可限制为其公网 CIDR，漫游设备需允许变化的来源。管理 SSH 的 TCP 22 仅向管理员 IP / 堡垒机开放。
 
-环境变量只作为安装输入，不自动读取 `.env`；修改 ENV 后需重新执行安装。模板使用同名 `${ENV_NAME}`，如 `server_url: "${SERVER_URL}"`；安装器只替换已知变量，发现未替换标记即失败。安装器与 `files/` 须一起更新。
+## 配置持久化
+
+环境变量只作为安装输入，不自动读取 `.env`。安装器渲染配置模板中的已知 `${ENV_NAME}`，发现未替换标记即失败；安装器与 `files/` 须一起更新。安装后直接维护目标机配置，服务启动和机器重启都不依赖登录 shell 的环境变量。
+
+Headscale 读取 `/etc/headscale/config.yaml`，管理控制面、TLS、DNS 和地址池；同目录的 `derp.yaml` 管理中继列表，`policy.hujson` 管理授权，初始 `grants: []` 拒绝互访。官方 DEB 已包含 `headscale.service`，安装器执行 `systemctl enable --now headscale`。[上游服务文件](https://github.com/juanfont/headscale/blob/v0.29.7/packaging/systemd/headscale.service)
+
+DERP 的 [配置模板](../files/derper.conf) 渲染为 `/etc/derper/derper.conf`，保存四个带双引号的值，例如：
+
+```ini
+SERVER_URL="https://tailbridge.example.net"
+DERP_HOSTNAME="tb-derp-hk-01.example.net"
+DERP_PORT="443"
+DERP_CERT_DIR="/etc/derper/certs"
+```
+
+固定的 [服务文件](../files/derper.service) 安装到 `/etc/systemd/system/derper.service`，通过 `EnvironmentFile` 读取配置并传给 derper。修改配置后重启即可，无需重新安装、设置 ENV 或执行 `daemon-reload`：
+
+```bash
+sudoedit /etc/derper/derper.conf
+sudo systemctl restart derper
+```
+
+修改中继域名或端口时，同步控制面的 `derp.yaml`、证书和防火墙。derper 原生 `-c` 文件只保存 JSON 身份密钥，本项目固定为 `/var/lib/derper/derper.key`；它不承载上述运行配置，不应删除或替换。[上游定义](https://github.com/tailscale/tailscale/blob/v1.104.5/cmd/derper/derper.go)
 
 ## control 控制面
 
@@ -30,7 +52,6 @@ Ubuntu 支持两种传参方式：`env KEY=value command` 仅给该命令传变�
 
 | 变量 | 要求 | 默认值 | 用途与格式 |
 | --- | --- | --- | --- |
-| `INSTALL_BASE_URL` | 必填 | 无 | 模板根 URL，如 `https://raw.githubusercontent.com/chinayin/tailbridge/main`；从其 `/files/` 下载模板 |
 | `SERVER_URL` | 必填 | 无（实际公网域需提供） | Headscale `server_url`：默认命名为 `https://tailbridge.<公网域>`，如 `https://tailbridge.example.net`；所有节点使用同一地址 |
 | `BASE_DOMAIN` | 必填 | 无 | Headscale `dns.base_domain`：完整 MagicDNS 尾网域，如 `tb.example.net`，不含协议 |
 | `ACME_EMAIL` | 自动证书必填 | 无 | Headscale `acme_email`：ACME 联系邮箱 |
@@ -68,8 +89,7 @@ Ubuntu 支持两种传参方式：`env KEY=value command` 仅给该命令传变�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env INSTALL_BASE_URL=https://raw.githubusercontent.com/chinayin/tailbridge/main \
-    SERVER_URL=https://tailbridge.example.net BASE_DOMAIN=tb.example.net \
+  sudo env SERVER_URL=https://tailbridge.example.net BASE_DOMAIN=tb.example.net \
     ACME_EMAIL=ops@example.net TLS_HOSTNAME=tailbridge.example.net \
     DERP_REGION_ID=910 DERP_REGION_CODE=ap-east-1 DERP_REGION_NAME='Hong Kong' \
     DERP_NODE_NAME=tb-derp-hk-01 \
@@ -85,7 +105,7 @@ sudo systemctl status headscale --no-pager
 curl -fsS https://tailbridge.example.net/health
 ```
 
-配置检查可能创建数据库和密钥，因此使用服务用户。安装后的配置位于 `/etc/headscale/`：`config.yaml` 管理控制面、TLS、DNS 和地址池；`derp.yaml` 管理下发的中继列表；`policy.hujson` 管理授权，初始 `grants: []` 拒绝互访。
+配置检查可能创建数据库和密钥，因此使用服务用户。配置位置和服务读取方式见[配置持久化](#配置持久化)。
 
 配置写入或校验失败时，安装器恢复原有三份配置及权限；首次安装则移除本次新建配置。用户、注册密钥、节点和路由通过 [REST API](API.md) 管理。
 
@@ -97,7 +117,6 @@ curl -fsS https://tailbridge.example.net/health
 
 | 变量 | 要求 | 默认值 | 用途与格式 |
 | --- | --- | --- | --- |
-| `INSTALL_BASE_URL` | 必填 | 无 | 与安装器同源的模板根 URL，从其 `/files/` 下载服务模板 |
 | `SERVER_URL` | 必填 | 无 | 控制面的 HTTPS URL，用于请求 `/verify` 校验接入 |
 | `DERP_HOSTNAME` | 必填 | 无 | 中继服务域名，与 control 的 Map 一致；不含协议、端口或路径 |
 | `DERP_PORT` | 可选 | `443` | 中继实际 TLS 监听端口，整数 `1–65535`；与控制面共用 IP 时填 `8443` |
@@ -109,15 +128,14 @@ curl -fsS https://tailbridge.example.net/health
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env INSTALL_BASE_URL=https://raw.githubusercontent.com/chinayin/tailbridge/main \
-    SERVER_URL=https://tailbridge.example.net \
+  sudo env SERVER_URL=https://tailbridge.example.net \
     DERP_HOSTNAME=tb-derp-hk-01.example.net \
     sh -s -- --role derp --dry-run
 ```
 
 确认计划后去掉 `--dry-run` 执行。同机部署时增加 `DERP_PORT=8443`，control 的 Map 也须填写相同端口；修改 Map 不会更改中继监听。
 
-安装器构建 `/usr/local/bin/derper`，将 [服务模板](../files/derper.service) 渲染为 `/etc/systemd/system/derper.service`，以 `derper` 用户和组运行。服务开机启动、失败自动重启；身份保存在 `/var/lib/derper/derper.key`，重跑和升级保留该文件，版本匹配时复用二进制。已有服务配置不同时须显式使用 `--force`。
+安装器构建 `/usr/local/bin/derper`，以 `derper` 用户和组运行，服务开机启动、失败自动重启。版本匹配时复用二进制，重跑和升级保留身份；配置与服务文件见[配置持久化](#配置持久化)。已有配置或服务文件不同时须显式使用 `--force`；写入失败时恢复两份文件及原有权限。
 
 服务关闭 HTTP 80、启用 UDP 3478 STUN，使用手动证书并向 `${SERVER_URL}/verify` 校验接入，固定 `-verify-client-url-fail-open=false`。无 systemd 时仍准备服务文件、账户和状态目录，由调用方按服务中的参数启动进程。
 
@@ -195,7 +213,7 @@ Headplane 不属于上述安装角色，控制地址、管理 API Key 和入口�
 ## 共用选项与验证
 
 - `--dry-run`：显示计划，不下载、写入或启动；不验证 DNS、网络和证书有效性。
-- `--force`：允许覆盖所选角色的不同配置；control 会重置已有策略和中继列表，derp 会覆盖服务配置，使用前先[备份](OPERATIONS.md#备份与升级)；不清除数据库、密钥或节点身份。
+- `--force`：允许覆盖所选角色的不同配置；control 会重置已有策略和中继列表，derp 会覆盖配置与服务文件，使用前先[备份](OPERATIONS.md#备份与升级)；不清除数据库、密钥或节点身份。
 - `--headscale-version X.Y.Z`、`--tailscale-version X.Y.Z`：覆盖默认版本，后者同时用于 derper；不带 `v`。默认值见[脚本顶部](../install.sh)，Go 由维护者更新。
 - `--version` 查看安装器版本，`--help` 查看帮助。退出码 `0` 表示所选阶段完成，`1` 表示参数或运行错误，`2` 表示前提不足；无 systemd 的成功不代表服务已启动。
 

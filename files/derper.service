@@ -7,6 +7,7 @@ After=network-online.target
 Type=exec
 User=derper
 Group=derper
+EnvironmentFile=/etc/derper/derper.conf
 ExecStart=/usr/local/bin/derper -hostname=${DERP_HOSTNAME} -a=:${DERP_PORT} -http-port=-1 -stun=true -stun-port=3478 -certmode=manual "-certdir=${DERP_CERT_DIR}" -c=/var/lib/derper/derper.key -verify-client-url=${SERVER_URL}/verify -verify-client-url-fail-open=false
 StateDirectory=derper
 StateDirectoryMode=0700

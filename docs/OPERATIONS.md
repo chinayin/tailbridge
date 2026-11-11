@@ -13,7 +13,7 @@ sudo -u headscale headscale configtest
 curl -fsS https://tailbridge.example.net/health
 ```
 
-修改前保留旧配置，以服务用户校验后再重载或重启。自动证书的端口与 DNS 要求见[安装说明](INSTALL.md#安全组与防火墙)；监测证书到期和签发失败，保留 ACME 缓存。手动证书更新后重启对应服务。
+修改前保留旧配置，以服务用户校验后再重载或重启；运行配置的位置和 DERP 修改方式见[配置持久化](INSTALL.md#配置持久化)。自动证书的端口与 DNS 要求见[安装说明](INSTALL.md#安全组与防火墙)；监测证书到期和签发失败，保留 ACME 缓存。手动证书更新后重启对应服务。
 
 DERP 证书由外部工具续期。更新 `DERP_CERT_DIR` 中的同名 `.crt` / `.key` 后，恢复服务组读取权限并重启；以下使用[默认目录](INSTALL.md#derp-中继)，替换域名和证书来源：
 
@@ -29,7 +29,7 @@ sudo systemctl restart derper
 
 ## 备份与升级
 
-备份 `/etc/headscale/`、完整 `/var/lib/headscale/`、各中继身份和证书、可选 UI 状态，以及安装版本与额外服务配置。备份包含私钥，限制访问并保留异机副本。
+备份 `/etc/headscale/`、完整 `/var/lib/headscale/`、各中继的 `/etc/derper/` 和 `/var/lib/derper/`、自定义目录中的证书、可选 UI 状态，以及安装版本与额外服务配置。备份包含私钥，限制访问并保留异机副本。
 
 停止 UI 写入及 Headscale 后复制状态，核验归档摘要，再恢复原运行状态。不要只复制运行中的 SQLite 主文件。升级前检查目标版本配置并跑 E2E；数据库已迁移时，回退必须恢复升级前完整备份及对应旧程序。[上游升级说明](https://headscale.net/stable/setup/upgrade/)
 

@@ -2,8 +2,8 @@
 # Install official components on the target; read templates from files/
 set -eu
 
-VERSION=0.5.0
-INSTALL_BASE_URL=${INSTALL_BASE_URL-}
+VERSION=0.5.1
+INSTALL_BASE_URL=${INSTALL_BASE_URL:-https://raw.githubusercontent.com/chinayin/tailbridge/main}
 DERP_PORT=${DERP_PORT:-443}
 DERP_CERT_DIR=${DERP_CERT_DIR:-/etc/derper/certs}
 HEADSCALE_VERSION=0.29.7
@@ -13,7 +13,7 @@ GO_VERSION=1.27.4
 TB_PREFIX=${TB_PREFIX:-}
 TB_OFFLINE=${TB_OFFLINE:-0}
 ROLE='' FORCE=0 DRY_RUN=0 TMP='' STAGED='' POLICY_GUARD='' CHANGED=0 PACKAGE_CHANGED=0 HAD_STATE=0
-CONFIG_PENDING=0
+CONFIG_PENDING=0 CONFIG_FILES=''
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 missing() { printf 'Error: %s\n' "$*" >&2; exit 2; }
@@ -28,15 +28,16 @@ Usage: install.sh --role control|derp|node [options]
   --dry-run                  Show URLs and paths without making changes
   --version                  Show the installer version
   -h, --help                 Show this help
-Control environment: INSTALL_BASE_URL (repository root URL), SERVER_URL,
+Control environment: SERVER_URL,
 BASE_DOMAIN, DERP_REGION_ID, DERP_REGION_CODE, DERP_REGION_NAME, DERP_NODE_NAME,
 DERP_HOSTNAME; DERP_PORT defaults to 443. TLS_HOSTNAME and
 ACME_EMAIL for ACME, or TLS_CERT_PATH and TLS_KEY_PATH for file certificates.
 DERP_IPV4 is optional. The Go toolchain version is maintained in this script.
-DERP environment: INSTALL_BASE_URL, SERVER_URL, DERP_HOSTNAME;
+DERP environment: SERVER_URL, DERP_HOSTNAME;
 DERP_PORT defaults to 443, DERP_CERT_DIR to /etc/derper/certs.
 Provide <DERP_HOSTNAME>.crt and .key before installing. systemd enables derper;
-without systemd the caller must start the relay using the installed unit parameters.
+without systemd the caller must start the relay using /etc/derper/derper.conf.
+INSTALL_BASE_URL overrides the template source (defaults to this repository's main).
 Node environment: SERVER_URL; NODE_AUTHKEY for first registration.
 NODE_HOSTNAME is optional; otherwise Tailscale uses the local hostname.
 ADVERTISE_EXIT_NODE=true enables IP forwarding and advertises an exit node;
@@ -97,7 +98,6 @@ validate_inputs() {
     esac
     case "${ROLE}" in
         control)
-            require_var INSTALL_BASE_URL "${INSTALL_BASE_URL}"
             require_var SERVER_URL "${SERVER_URL:-}"
             require_var BASE_DOMAIN "${BASE_DOMAIN:-}"
             require_var DERP_REGION_ID "${DERP_REGION_ID:-}"
@@ -127,12 +127,11 @@ validate_inputs() {
             case "${DERP_PORT}" in *[!0-9]*|'') die 'invalid DERP port' ;; esac
             [ "${DERP_PORT}" -ge 1 ] && [ "${DERP_PORT}" -le 65535 ] || die 'invalid DERP port' ;;
         derp)
-            require_var INSTALL_BASE_URL "${INSTALL_BASE_URL}"
             require_var SERVER_URL "${SERVER_URL:-}"
             require_var DERP_HOSTNAME "${DERP_HOSTNAME:-}"
             for value in "${SERVER_URL}" "${DERP_HOSTNAME}" "${DERP_CERT_DIR}"; do
                 reject_value "${value}"
-                case "${value}" in *\$*|*%*) die 'systemd expansions are not allowed in DERP settings' ;; esac
+                case "${value}" in *\$*|*%*|*\`*) die 'expansions are not allowed in DERP settings' ;; esac
             done
             printf '%s\n' "${SERVER_URL}" | LC_ALL=C grep -Eq '^https://[a-zA-Z0-9.-]+(:[0-9]+)?/?$' ||
                 die 'SERVER_URL must be an HTTPS origin'
@@ -171,6 +170,7 @@ print_plan() {
         derp)
             printf 'https://go.dev/dl/%s; tailscale.com/cmd/derper@v%s -> /usr/local/bin/derper\n' "${GO_FILE}" "${TAILSCALE_VERSION}" >&2
             printf '%s/files/derper.service -> %s/etc/systemd/system/derper.service; enable derper\n' "${INSTALL_BASE_URL%/}" "${TB_PREFIX}" >&2
+            printf '%s/files/derper.conf -> %s/etc/derper/derper.conf (compare; --force required if different)\n' "${INSTALL_BASE_URL%/}" "${TB_PREFIX}" >&2
             printf 'TLS: %s/%s.crt and .key; TCP %s, UDP 3478; identity: /var/lib/derper/derper.key\n' \
                 "${DERP_CERT_DIR}" "${DERP_HOSTNAME}" "${DERP_PORT}" >&2 ;;
     esac
@@ -181,11 +181,11 @@ cleanup() {
     if [ "${CONFIG_PENDING}" = 1 ]; then
         # Restore the complete configuration set before removing temporary backups
         restore_failed=0
-        for file in config.yaml derp.yaml policy.hujson; do
-            target="${TB_PREFIX}/etc/headscale/${file}"
-            if [ -f "${TMP}/original/${file}" ]; then
+        for file in ${CONFIG_FILES}; do
+            target="${TB_PREFIX}${file}"
+            if [ -f "${TMP}/original${file}" ]; then
                 restored=$(mktemp "${target}.XXXXXX") &&
-                    cp -p "${TMP}/original/${file}" "${restored}" &&
+                    cp -p "${TMP}/original${file}" "${restored}" &&
                     mv -f "${restored}" "${target}" || restore_failed=1
                 [ -z "${restored}" ] || rm -f "${restored}"
             else
@@ -211,6 +211,19 @@ prepare_tmp() {
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+}
+
+backup_configuration() {
+    # Callers supply fixed absolute paths; retain modes for rollback
+    for file in "$@"; do
+        target="${TB_PREFIX}${file}"
+        if [ -f "${target}" ]; then
+            mkdir -p "${TMP}/original${file%/*}"
+            cp -p "${target}" "${TMP}/original${file}"
+        fi
+    done
+    CONFIG_FILES=$*
+    CONFIG_PENDING=1
 }
 
 install_tool() {
@@ -444,12 +457,7 @@ install_control() {
     check_overwrite
     fetch_package
     install -d -m 755 "${TB_PREFIX}/etc/headscale"
-    mkdir "${TMP}/original"
-    for file in config.yaml derp.yaml policy.hujson; do
-        target="${TB_PREFIX}/etc/headscale/${file}"
-        if [ -f "${target}" ]; then cp -p "${target}" "${TMP}/original/${file}"; fi
-    done
-    CONFIG_PENDING=1
+    backup_configuration /etc/headscale/config.yaml /etc/headscale/derp.yaml /etc/headscale/policy.hujson
     for file in config.yaml derp.yaml policy.hujson; do
         target="${TB_PREFIX}/etc/headscale/${file}"
         if ! cmp -s "${TMP}/${file}" "${target}"; then
@@ -465,14 +473,17 @@ install_control() {
     enable_unit headscale
 }
 install_derp() {
-    apply_template derper.service
-    target="${TB_PREFIX}/etc/systemd/system/derper.service"
-    [ ! -L "${target}" ] || die "refusing configuration symlink: ${target}"
-    [ ! -e "${target}" ] || [ -f "${target}" ] || die "configuration is not a regular file: ${target}"
-    if [ -e "${target}" ] && ! cmp -s "${TMP}/derper.service" "${target}"; then
-        warn "configuration differs: ${target}"
-        [ "${FORCE}" = 1 ] || die 'configuration exists; use --force to replace it'
-    fi
+    apply_template derper.conf
+    download "${INSTALL_BASE_URL%/}/files/derper.service" "${TMP}/derper.service"
+    for file in /etc/derper/derper.conf /etc/systemd/system/derper.service; do
+        target="${TB_PREFIX}${file}"
+        [ ! -L "${target}" ] || die "refusing configuration symlink: ${target}"
+        [ ! -e "${target}" ] || [ -f "${target}" ] || die "configuration is not a regular file: ${target}"
+        if [ -e "${target}" ] && ! cmp -s "${TMP}/${file##*/}" "${target}"; then
+            warn "configuration differs: ${target}"
+            [ "${FORCE}" = 1 ] || die 'configuration exists; use --force to replace it'
+        fi
+    done
     cert="${DERP_CERT_DIR}/${DERP_HOSTNAME}.crt"
     key="${DERP_CERT_DIR}/${DERP_HOSTNAME}.key"
     [ -s "${cert}" ] && [ -s "${key}" ] || missing 'provide the DERP certificate and private key before installation'
@@ -505,14 +516,19 @@ install_derp() {
     if [ "${TB_OFFLINE}" != 1 ] && command -v systemd-analyze >/dev/null 2>&1; then
         systemd-analyze verify "${TMP}/derper.service" >&2 || die 'invalid derper service unit'
     fi
-    if ! cmp -s "${TMP}/derper.service" "${target}"; then
-        install -d -m 755 "${TB_PREFIX}/etc/systemd/system"
-        STAGED=$(mktemp "${target}.XXXXXX")
-        install -m 644 "${TMP}/derper.service" "${STAGED}"
-        mv -f "${STAGED}" "${target}"
-        STAGED=''
-        CHANGED=1
-    fi
+    install -d -m 755 "${TB_PREFIX}/etc/derper" "${TB_PREFIX}/etc/systemd/system"
+    backup_configuration /etc/derper/derper.conf /etc/systemd/system/derper.service
+    for file in ${CONFIG_FILES}; do
+        target="${TB_PREFIX}${file}"
+        if ! cmp -s "${TMP}/${file##*/}" "${target}"; then
+            STAGED=$(mktemp "${target}.XXXXXX")
+            install -m 644 "${TMP}/${file##*/}" "${STAGED}"
+            mv -f "${STAGED}" "${target}"
+            STAGED=''
+            CHANGED=1
+        fi
+    done
+    CONFIG_PENDING=0
     enable_unit derper
 }
 configure_forwarding() {

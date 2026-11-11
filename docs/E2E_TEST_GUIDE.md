@@ -21,7 +21,7 @@ WebUI 入口为 <http://127.0.0.1:3000/admin>，登录密钥位于 `local/e2e/ge
 
 `compose.yaml` 是完整静态编排。Ubuntu 镜像只安装系统工具，`start.sh` 调用根目录 `install.sh` 安装组件。`installer-files` 提供安装器和 `files/` 模板，配置在目标容器替换并校验。本机 `e2e.py` 准备测试证书、SSH 凭据和可选 UI 配置。
 
-容器直接运行 `headscale serve`、`derper`、`tailscaled` 和 SSH 服务，由 Compose 管理生命周期，不启动 systemd。DERP 入口先复制只读证书，再执行安装器，以 `derper` 用户启动。已有 control 容器重启直接复用配置；`make e2e-up` 重建 control 并重新应用安装模板。
+容器直接运行 `headscale serve`、`derper`、`tailscaled` 和 SSH 服务，由 Compose 管理生命周期，不启动 systemd。DERP 入口先复制只读证书，再执行安装器，读取生成的 [DERP 配置](INSTALL.md#配置持久化)，以 `derper` 用户启动。已有 control 容器重启直接复用配置；`make e2e-up` 重建 control 并重新应用安装模板。
 
 E2E 从 `derp_map` 提取地域、节点名和端点，作为 `DERP_*` 环境变量传给 control，由安装器渲染共享模板。修改环境配置后执行 `make e2e-up`；单独 `docker restart` 不会更新环境变量。
 
@@ -72,7 +72,7 @@ make e2e-down          # 保留卷、配置与凭据
 
 基础检查也会临时切换客户端出口，但不停止服务；出口和完整检查会短暂停止模拟出口。测试完成或失败时撤销临时选择并恢复 LAN 偏好，客户端平时保持不选出口。已有手动出口选择会触发前置检查失败，避免覆盖用户设置。
 
-`make e2e-derp-service` 从已运行的 E2E 中继复制程序，在临时特权容器中以 systemd 为 PID 1，验证非 root 运行、443 / 8443 TLS、STUN、重跑和证书保护、异常恢复及容器重启自启。构建测试镜像需要软件源访问；运行时无外部网络、共享状态卷或宿主端口，结束后清理容器和临时文件。此项不验证控制面认证或真实主机重启；完整转发仍用上述网络测试。其他实例可运行 `local/.venv/bin/python tests/e2e/derp_service.py --config local/<实例>/environment.yaml`。
+`make e2e-derp-service` 从已运行的 E2E 中继复制程序，在临时特权容器中以 systemd 为 PID 1，验证非 root 运行、TLS、STUN、重跑和证书保护、异常恢复及容器重启自启；同时核对实际进程参数，测试仅修改 conf 后无环境变量重启生效、重启容器后配置与身份保持。构建测试镜像需要软件源访问；运行时无外部网络、共享状态卷或宿主端口，结束后清理容器和临时文件。此项不验证控制面认证或真实主机重启；完整转发仍用上述网络测试。其他实例可运行 `local/.venv/bin/python tests/e2e/derp_service.py --config local/<实例>/environment.yaml`。
 
 ## HTTP 出口测试拓扑
 
