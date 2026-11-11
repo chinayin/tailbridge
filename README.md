@@ -65,6 +65,7 @@ Choose either automatic or file certificates. `DERP_*` values configure the cont
 Detailed guides are currently in Chinese.
 
 - [Installation and configuration](docs/INSTALL.md)
+- [REST management API](docs/API.md)
 - [Architecture](docs/ARCHITECTURE.md) · [Design decisions](docs/DESIGN_PROPOSAL.md)
 - [Node naming](docs/NODE_NAMING.md)
 - [Operations](docs/OPERATIONS.md)

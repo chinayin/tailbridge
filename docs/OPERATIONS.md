@@ -13,7 +13,7 @@ curl -fsS https://tailbridge.example.net/health
 
 修改前保留旧配置，以服务用户校验后再重载或重启。自动证书的端口与 DNS 要求见[安装说明](INSTALL.md#安全组与防火墙)；监测证书到期和签发失败，保留 ACME 缓存。手动证书更新后重启对应服务。
 
-管理 API Key 先验证新 key，再用 `headscale apikeys expire --id <旧ID>` 撤销旧 key；`apikeys list` 可查有效期。UI 会话密钥单独轮换，不会自动撤销设备身份。
+管理 API Key 的签发和轮换见 [REST 管理](API.md#认证)。UI 会话密钥单独轮换，不会自动撤销设备身份。
 
 ## 备份与升级
 
@@ -31,7 +31,7 @@ curl -fsS https://tailbridge.example.net/health
 
 退役时先发布不含旧节点的 Map，确认客户端切换，再停止旧中继。控制面维护会影响中继的新接入校验，应安排维护窗口。
 
-访问策略以 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），REST API 不写策略。按用户、设备和目标端口授权，修改后执行 `sudo -u headscale headscale policy check --file /etc/headscale/policy.hujson`，通过后用 `sudo systemctl kill --signal=HUP --kill-who=main headscale` 重载，再验证允许与拒绝两种情况。节点注册、撤销和路由批准通过管理 API 分别处理。
+访问策略以 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），REST API 不写策略。按用户、设备和目标端口授权，修改后执行 `sudo -u headscale headscale policy check --file /etc/headscale/policy.hujson`，通过后用 `sudo systemctl kill --signal=HUP --kill-who=main headscale` 重载，再验证允许与拒绝两种情况。节点注册、撤销和路由批准通过 [管理 API](API.md) 分别处理。
 
 ## 重启控制面
 
@@ -53,12 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 
 首次安装还需注册密钥；参数及无 systemd 的处理见[安装说明](INSTALL.md#node-设备)。脚本写入 `/etc/sysctl.d/99-tailbridge-exit-node.conf` 并立即开启转发。IP 转发是 Linux 出口的必需项，不是性能优化；默认 netfilter 模式由 Tailscale 管理转发与 NAT 规则，无需手工全局放开 iptables。自定义防火墙仍需允许所需流量，脚本不会清空或改写其规则。[IP 转发要求](https://tailscale.com/docs/reference/troubleshooting/network-configuration/ip-forwarding-errors-advertise) · [netfilter 模式](https://tailscale.com/docs/reference/netfilter-modes)
 
-在控制面查询实际节点 ID 后批准默认路由，以下假定 ID 为 `7`：
-
-```bash
-sudo headscale nodes list-routes
-sudo headscale nodes approve-routes --identifier 7 --routes 0.0.0.0/0,::/0
-```
+通过 [REST 节点与路由接口](API.md#节点与路由)查询实际节点 ID，批准 `0.0.0.0/0` 和 `::/0`。
 
 将下面的授权合并进现有 `grants`，把 `alice@` 替换为实际用户；它只授权互联网出口：
 
@@ -66,10 +61,7 @@ sudo headscale nodes approve-routes --identifier 7 --routes 0.0.0.0/0,::/0
 {"src": ["alice@"], "dst": ["autogroup:internet"], "ip": ["*"]}
 ```
 
-```bash
-sudo -u headscale headscale policy check --file /etc/headscale/policy.hujson
-sudo systemctl reload headscale
-```
+按[访问策略流程](#中继与访问策略)校验并重载。
 
 路由批准与使用授权分别生效，客户端还须主动选择出口，见 [出口切换](#整机出口切换与排查)。[Headscale 路由](https://github.com/juanfont/headscale/blob/v0.29.7/docs/ref/routes.md#exit-node) · [Tailscale 出口](https://tailscale.com/docs/features/exit-nodes)
 

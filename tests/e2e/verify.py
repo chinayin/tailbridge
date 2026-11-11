@@ -32,8 +32,8 @@ def configure(path=None):
     TARGET = CONFIG.service("target")
 
 
-def command(args, timeout=45, check=True, env=None):
-    result = subprocess.run(args, text=True, capture_output=True, timeout=timeout, env=env)
+def command(args, timeout=45, check=True, env=None, input=None):
+    result = subprocess.run(args, text=True, capture_output=True, timeout=timeout, env=env, input=input)
     if check and result.returncode:
         raise RuntimeError(result.stderr.strip()[-2000:] or f"Command failed: {args[0]}")
     return result
@@ -91,6 +91,21 @@ def ubuntu_runtime():
             "Headscale binary does not match installed DEB")
     REPORT["versions"]["runtime"] = runtimes
     passed("Ubuntu 26.04 control and nodes run official programs without systemd", headscale_deb=package)
+
+
+def management_api():
+    key = json.loads(node("control", "headscale", "apikeys", "create", "--expiration", "10m",
+                          "--output", "json").stdout)
+    require(isinstance(key, str) and key.startswith("hskey-api-"), "Invalid temporary API key response")
+    try:
+        result = node(CLIENTS[0], "python3", "-c", (ROOT / "api_smoke.py").read_text(),
+                      CONFIG.server_url, input=key + "\n", timeout=240)
+        checks = json.loads(result.stdout)["checks"]
+    finally:
+        node("control", "headscale", "apikeys", "expire", "--prefix", key.removeprefix("hskey-api-")[:12])
+    for check in checks:
+        passed(check)
+    passed("temporary management API key revoked")
 
 
 def ssh(service, target, check=True):
@@ -556,6 +571,8 @@ def main():
             "headscale": compose("exec", "-T", "control", "headscale", "version").stdout.strip(),
         }
         ubuntu_runtime()
+        if not args.exit_only:
+            management_api()
         states = {name: eventually(lambda name=name: identity(name)) for name in NODES} if args.exit_only else basic()
         runtime_layout()
         exit_routing(states, faults=not args.basic)

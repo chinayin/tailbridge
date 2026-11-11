@@ -310,6 +310,7 @@ elif sys.argv[1] == 'up':
         self.stub('tailscale', '''
 if sys.argv[1] == 'version': print('1.104.5')
 elif sys.argv[1] == 'status': print(json.dumps({'BackendState': os.environ['TEST_STATE']}))
+elif sys.argv[1:] == ['debug', 'prefs']: print(json.dumps({'ControlURL': 'https://control.example.test/'}))
 elif sys.argv[1:] == ['up'] and os.environ['TEST_STATE'] == 'Stopped':
     Path(os.environ['TEST_CALLS']).write_text('resumed existing preferences')
 else:
@@ -355,6 +356,9 @@ else: raise SystemExit('unexpected sysctl command')
         self.stub('tailscale', '''
 if sys.argv[1]=='version': print('1.104.5')
 elif sys.argv[1]=='status': print(json.dumps({'BackendState':os.environ['TEST_STATE']}))
+elif sys.argv[1:]==['debug','prefs']:
+    if os.environ.get('TEST_PREFS_FAIL'): raise SystemExit(1)
+    print(json.dumps({'ControlURL':os.environ.get('TEST_CONTROL_URL','https://control.example.test/')}))
 else:
     if sys.argv[1]=='set':
         assert sys.argv[2:]==['--advertise-exit-node']
@@ -378,6 +382,37 @@ else:
         self.assertEqual((self.prefix/'var/lib/tailscale/tailscaled.state').read_text(), 'preserved identity')
         self.run_install(role='node', changes=changes)
         self.assertEqual(config.read_text().count('net.ipv4.ip_forward'), 1)
+
+    def test_existing_node_rejects_wrong_or_unknown_control_before_tailnet_changes(self):
+        changes = self.exit_runtime()
+        for backend in ('Running', 'Stopped'):
+            for prefs in ({'TEST_CONTROL_URL': 'https://other.example.test'},
+                          {'TEST_CONTROL_URL': ''}, {'TEST_PREFS_FAIL': '1'}):
+                with self.subTest(backend=backend, prefs=prefs):
+                    result = self.run_install('--force', role='node', expected=2,
+                                              changes={**changes, 'TEST_STATE': backend, **prefs})
+                    self.assertFalse((self.base / 'calls').exists())
+                    self.assertIn('state preserved', result.stderr)
+                    self.assertEqual((self.prefix / 'var/lib/tailscale/tailscaled.state').read_text(),
+                                     'preserved identity')
+
+    def test_stopped_node_with_custom_state_path_preserves_preferences(self):
+        changes = self.exit_runtime(backend='Stopped')
+        (self.prefix / 'var/lib/tailscale/tailscaled.state').unlink()
+        self.run_install(role='node', expected=2,
+                         changes={**changes, 'TEST_CONTROL_URL': 'https://other.example.test'})
+        self.assertFalse((self.base / 'calls').exists())
+        self.run_install(role='node', changes=changes)
+        calls = [json.loads(line) for line in (self.base / 'calls').read_text().splitlines()]
+        self.assertEqual(calls, [['up'], ['set', '--advertise-exit-node']])
+
+    def test_control_rejects_directory_before_publishing_any_file(self):
+        self.config('derp.yaml').mkdir(parents=True)
+        self.config().write_bytes(b'original configuration')
+        self.run_install('--force', expected=1)
+        self.assertEqual(self.config().read_bytes(), b'original configuration')
+        self.assertEqual(list(self.config('derp.yaml').iterdir()), [])
+        self.assertFalse(self.config('policy.hujson').exists())
 
     def test_exit_first_registration_precedes_advertisement(self):
         changes = self.exit_runtime(backend='NeedsLogin')
@@ -474,6 +509,57 @@ raise SystemExit(subprocess.call(['/usr/bin/install', *clean]))
     def test_installed_headscale_multiline_version_is_accepted(self):
         self.run_install(changes=self.control_runtime())
         self.assertTrue(self.config().is_file())
+
+    def test_failed_control_validation_restores_all_files_and_permissions(self):
+        changes = self.control_runtime()
+        originals = {'config.yaml': (b'original configuration', 0o600),
+                     'derp.yaml': (b'original regions', 0o640),
+                     'policy.hujson': (b'original grants', 0o644)}
+        self.config().parent.mkdir(parents=True)
+        for name, (content, mode) in originals.items():
+            self.config(name).write_bytes(content)
+            self.config(name).chmod(mode)
+        (self.prefix / 'run/systemd/system').mkdir(parents=True)
+        self.stub('systemctl', 'Path(os.environ["TEST_STARTED"]).touch()')
+        self.stub('headscale', '''
+if sys.argv[1] == 'version': print('headscale version v0.29.7')
+elif sys.argv[1] == os.environ['TEST_FAIL_CHECK']: raise SystemExit(1)
+''')
+        for check in ('configtest', 'policy'):
+            with self.subTest(check=check):
+                self.run_install('--force', expected=1, changes={**changes, 'TEST_FAIL_CHECK': check,
+                                 'TEST_STARTED': str(self.base / 'started')})
+                for name, (content, mode) in originals.items():
+                    self.assertEqual(self.config(name).read_bytes(), content)
+                    self.assertEqual(self.config(name).stat().st_mode & 0o777, mode)
+                self.assertFalse((self.base / 'started').exists())
+
+    def test_failed_first_control_validation_removes_new_files(self):
+        changes = self.control_runtime()
+        self.stub('headscale', '''
+if sys.argv[1] == 'version': print('headscale version v0.29.7')
+elif sys.argv[1] == 'configtest': raise SystemExit(1)
+''')
+        self.run_install(expected=1, changes=changes)
+        for name in ('config.yaml', 'derp.yaml', 'policy.hujson'):
+            self.assertFalse(self.config(name).exists())
+
+    def test_partial_control_write_failure_restores_files(self):
+        self.run_install()
+        originals = {p.name: p.read_bytes() for p in self.config().parent.iterdir()}
+        self.stub('mv', '''
+import subprocess
+target = Path(sys.argv[-1])
+marker = Path(os.environ['TEST_FAILED_WRITE'])
+if target.name == 'derp.yaml' and not marker.exists():
+    marker.touch()
+    raise SystemExit(1)
+raise SystemExit(subprocess.call(['/bin/mv', *sys.argv[1:]]))
+''')
+        self.run_install('--force', expected=1, changes={'SERVER_URL': 'https://new.example.test',
+                         'DERP_REGION_NAME': 'New Region', 'TEST_FAILED_WRITE': str(self.base / 'failed')})
+        for name, content in originals.items():
+            self.assertEqual(self.config(name).read_bytes(), content)
 
     def test_initial_policy_validation_does_not_require_running_headscale(self):
         changes = self.control_runtime()

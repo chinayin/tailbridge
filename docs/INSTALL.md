@@ -87,6 +87,8 @@ curl -fsS https://tailbridge.example.net/health
 
 配置检查可能创建数据库和密钥，因此使用服务用户。安装后的配置位于 `/etc/headscale/`：`config.yaml` 管理控制面、TLS、DNS 和地址池；`derp.yaml` 管理下发的中继列表；`policy.hujson` 管理授权，初始 `grants: []` 拒绝互访。
 
+配置写入或校验失败时，安装器恢复原有三份配置及权限；首次安装则移除本次新建配置。用户、注册密钥、节点和路由通过 [REST API](API.md) 管理。
+
 初始模板见 [files/](../files/)，固定地址池为 `100.77.0.0/23`、`fd7a:115c:a1e0:77::/64`，部署前检查冲突；内置和公共 DERP 均关闭。后续变更直接维护目标机配置，见[运维](OPERATIONS.md)。
 
 ## derp 中继
@@ -167,15 +169,7 @@ sudo env SERVER_URL=https://tailbridge.example.net \
 
 ### 安装与检查
 
-先在控制面创建用户并签发注册密钥：
-
-```bash
-sudo headscale users create alice    # 用户已存在时跳过
-sudo headscale users list            # 查看 alice 的 ID
-sudo headscale preauthkeys create --user 1 --expiration 1h  # 将 1 替换为实际用户 ID
-```
-
-将输出的密钥传给待安装节点。默认单次使用、1 小时内有效；每个新节点签发一个即可。可手动复制到安装命令，也可由已有 SSH 自动化传入，安装器不会向未注册节点自动下发密钥。节点身份建立后，注册密钥过期不会导致设备掉线。[注册密钥](https://headscale.net/stable/ref/registration/#pre-authenticated-key)
+先按 [REST API 的用户与注册密钥流程](API.md#用户与注册密钥)签发单次使用的 key，再通过已有安全通道传给待安装节点。安装器不会自动向未注册设备下发密钥。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
@@ -187,6 +181,8 @@ sudo tailscale netcheck
 ```
 
 有 systemd 时安装器启动并注册；无 systemd 时由调用方启动、注册及宣告出口，安装器不消费 authkey，但仍按开关配置转发。已有有效身份重跑不需要密钥；损坏或失效状态保留并报错，须显式处理重新认证。手机和 Mac 使用官方客户端接入。[注册方式](https://headscale.net/stable/ref/registration/)
+
+复用身份前会核对已保存的 `ControlURL`；与 `SERVER_URL` 不同、为空或无法读取时拒绝继续，`--force` 不切换身份。
 
 需要出口时在上述命令中增加 `ADVERTISE_EXIT_NODE=true`，随后完成[控制面批准与授权](OPERATIONS.md#配置-linux-出口)。
 

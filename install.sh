@@ -2,7 +2,7 @@
 # Install official components on the target; read templates from files/
 set -eu
 
-VERSION=0.4.1
+VERSION=0.4.2
 INSTALL_BASE_URL=${INSTALL_BASE_URL-}
 DERP_PORT=${DERP_PORT:-443}
 HEADSCALE_VERSION=0.29.7
@@ -12,6 +12,7 @@ GO_VERSION=1.27.4
 TB_PREFIX=${TB_PREFIX:-}
 TB_OFFLINE=${TB_OFFLINE:-0}
 ROLE='' FORCE=0 DRY_RUN=0 TMP='' STAGED='' POLICY_GUARD='' CHANGED=0 PACKAGE_CHANGED=0 HAD_STATE=0
+CONFIG_PENDING=0
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 missing() { printf 'Error: %s\n' "$*" >&2; exit 2; }
@@ -152,6 +153,26 @@ print_plan() {
 
 ensure_root() { [ "${TB_OFFLINE}" = 1 ] || [ "$(id -u)" -eq 0 ] || missing 'run as root'; }
 cleanup() {
+    if [ "${CONFIG_PENDING}" = 1 ]; then
+        # Restore the complete configuration set before removing temporary backups
+        restore_failed=0
+        for file in config.yaml derp.yaml policy.hujson; do
+            target="${TB_PREFIX}/etc/headscale/${file}"
+            if [ -f "${TMP}/original/${file}" ]; then
+                restored=$(mktemp "${target}.XXXXXX") &&
+                    cp -p "${TMP}/original/${file}" "${restored}" &&
+                    mv -f "${restored}" "${target}" || restore_failed=1
+                [ -z "${restored}" ] || rm -f "${restored}"
+            else
+                rm -f "${target}" || restore_failed=1
+            fi
+        done
+        if [ "${restore_failed}" = 1 ]; then
+            warn "configuration restore failed; backups retained in ${TMP}/original"
+            return 1
+        fi
+        warn 'configuration restored after installation failure'
+    fi
     if [ -n "${POLICY_GUARD}" ]; then
         rm -f /usr/sbin/policy-rc.d
         if [ -e "${TMP}/policy-rc.d" ]; then mv "${TMP}/policy-rc.d" /usr/sbin/policy-rc.d; fi
@@ -211,6 +232,7 @@ check_overwrite() {
     for file in config.yaml derp.yaml policy.hujson; do
         target="${TB_PREFIX}/etc/headscale/${file}"
         [ ! -L "${target}" ] || die "refusing configuration symlink: ${target}"
+        [ ! -e "${target}" ] || [ -f "${target}" ] || die "configuration is not a regular file: ${target}"
         if [ -e "${target}" ] && ! cmp -s "${TMP}/${file}" "${target}"; then
             conflict=1
             warn "configuration differs: ${target}"
@@ -356,6 +378,15 @@ register_node() {
         [ "$(date +%s)" -lt "${deadline}" ] || die 'tailscaled startup timed out'
         sleep 1
     done
+    # An authenticated daemon may use a custom state path
+    case "${state}" in Running|Stopped) HAD_STATE=1 ;; esac
+    if [ "${HAD_STATE}" = 1 ]; then
+        timeout 5 tailscale debug prefs > "${TMP}/prefs.json" 2>/dev/null ||
+            missing 'cannot read existing control URL; state preserved'
+        current_url=$(sed -n 's/.*"ControlURL"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${TMP}/prefs.json")
+        [ -n "${current_url}" ] && [ "${current_url%/}" = "${SERVER_URL%/}" ] ||
+            missing 'existing control URL differs from SERVER_URL or is unknown; state preserved'
+    fi
     [ "${state}" != Running ] || return 0
     if [ "${HAD_STATE}" = 1 ]; then
         [ "${state}" = Stopped ] || missing 'existing identity needs explicit reauthentication; state preserved'
@@ -375,6 +406,12 @@ install_control() {
     check_overwrite
     fetch_package
     install -d -m 755 "${TB_PREFIX}/etc/headscale"
+    mkdir "${TMP}/original"
+    for file in config.yaml derp.yaml policy.hujson; do
+        target="${TB_PREFIX}/etc/headscale/${file}"
+        if [ -f "${target}" ]; then cp -p "${target}" "${TMP}/original/${file}"; fi
+    done
+    CONFIG_PENDING=1
     for file in config.yaml derp.yaml policy.hujson; do
         target="${TB_PREFIX}/etc/headscale/${file}"
         if ! cmp -s "${TMP}/${file}" "${target}"; then
@@ -386,6 +423,7 @@ install_control() {
         fi
     done
     validate_control
+    CONFIG_PENDING=0
     enable_unit headscale
 }
 install_derp() { fetch_go; warn 'derper installed; caller must configure and start the relay'; }

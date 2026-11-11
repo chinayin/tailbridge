@@ -63,6 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 ## 相关文档
 
 - [安装与配置](docs/INSTALL.md)
+- [REST 管理 API](docs/API.md)
 - [项目架构](docs/ARCHITECTURE.md) · [设计决策](docs/DESIGN_PROPOSAL.md)
 - [节点命名](docs/NODE_NAMING.md)
 - [运维](docs/OPERATIONS.md)
