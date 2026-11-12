@@ -30,9 +30,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - uses: pollenjp/setup-shellcheck@v1
       - name: Install test dependencies
-        run: make setup
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck --version
+          make setup
       - name: Lint
         run: make lint
       - name: Offline tests
