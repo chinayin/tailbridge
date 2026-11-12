@@ -123,6 +123,26 @@ class InstallPathTests(unittest.TestCase):
             self.assertFalse((config.bundle / 'config/config.yaml').exists())
             self.assertFalse((config.bundle / '.env').exists())
 
+    def test_prepare_exposes_ca_certificate_but_preserves_private_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Settings(read_yaml(ROOT / 'environment.example.yaml'), folder)
+            previous_mask = os.umask(0o077)
+            try:
+                with patch.object(e2e, 'CONFIG', config), patch.object(e2e, 'GENERATED', config.generated):
+                    e2e.prepare()
+                    ca = config.generated / 'ca.crt'
+                    key = config.generated / 'ca.key'
+                    original = (ca.read_bytes(), key.read_bytes())
+                    self.assertEqual(ca.stat().st_mode & 0o777, 0o644)
+                    self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+                    ca.chmod(0o600)
+                    e2e.prepare()
+                    self.assertEqual(ca.stat().st_mode & 0o777, 0o644)
+                    self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual((ca.read_bytes(), key.read_bytes()), original)
+            finally:
+                os.umask(previous_mask)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -83,6 +83,8 @@ def prepare():
         run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30",
              "-subj", "/CN=tailbridge-ca", "-keyout", str(GENERATED / "ca.key"),
              "-out", str(GENERATED / "ca.crt")])
+    # Non-root services need the public CA through their individual bind mounts
+    (GENERATED / "ca.crt").chmod(0o644)
     prepare_certificate(CONFIG.server_host, "control", CONFIG.bundle / "tls/fullchain.pem",
                         CONFIG.bundle / "secrets/control_tls_key")
     for service, node in zip(CONFIG.relays, CONFIG.relay_nodes):
