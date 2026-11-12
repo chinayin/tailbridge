@@ -58,9 +58,9 @@ sudo systemctl restart derper
 出口机器必须能访问目标网络。已接入的 Linux 节点执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env SERVER_URL=https://tailbridge.example.net ADVERTISE_EXIT_NODE=true \
-    sh -s -- --role node
+sudo env SERVER_URL=https://tailbridge.example.net ADVERTISE_EXIT_NODE=true \
+  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+    sh -s -- --role node'
 ```
 
 首次安装还需注册密钥；参数及无 systemd 的处理见[安装说明](INSTALL.md#node-设备)。脚本写入 `/etc/sysctl.d/99-tailbridge-exit-node.conf` 并立即开启转发。IP 转发是 Linux 出口的必需项，不是性能优化；默认 netfilter 模式由 Tailscale 管理转发与 NAT 规则，无需手工全局放开 iptables。自定义防火墙仍需允许所需流量，脚本不会清空或改写其规则。[IP 转发要求](https://tailscale.com/docs/reference/troubleshooting/network-configuration/ip-forwarding-errors-advertise) · [netfilter 模式](https://tailscale.com/docs/reference/netfilter-modes)

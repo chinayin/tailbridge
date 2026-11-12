@@ -2,10 +2,10 @@ PYTHON ?= local/.venv/bin/python
 export PYTHONDONTWRITEBYTECODE := 1
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint e2e-init e2e-up e2e-bootstrap e2e-ui e2e-test e2e-basic e2e-exit e2e-derp-service e2e-status e2e-down
+.PHONY: help setup test lint e2e-init e2e-up e2e-bootstrap e2e-ui e2e-test e2e-basic e2e-exit e2e-derp-service e2e-systemd e2e-status e2e-down
 
 help:
-	@printf '%s\n' 'setup          Install tooling into local/.venv' 'test           Run offline regression tests' 'lint           Check Python and shell syntax (requires shellcheck)' 'e2e-init       Create local E2E inputs if absent' 'e2e-bootstrap  Register simulated devices for the first time' 'e2e-up         Start E2E using existing identities' 'e2e-ui         Start the optional WebUI' 'e2e-basic      Check running E2E without service fault injection' 'e2e-exit       Check dual-stack exit HTTP, permissions and recovery' 'e2e-test       Run full E2E, including temporary network faults' 'e2e-derp-service Check DERP systemd in an isolated container' 'e2e-status     Show E2E services' 'e2e-down       Stop E2E, preserving volumes and credentials'
+	@printf '%s\n' 'setup          Install tooling into local/.venv' 'test           Run offline regression tests' 'lint           Check Python and shell syntax (requires shellcheck)' 'e2e-init       Create local E2E inputs if absent' 'e2e-bootstrap  Register simulated devices for the first time' 'e2e-up         Start E2E using existing identities' 'e2e-ui         Start the optional WebUI' 'e2e-basic      Check running E2E without service fault injection' 'e2e-exit       Check dual-stack exit HTTP, permissions and recovery' 'e2e-test       Run full E2E, including temporary network faults' 'e2e-derp-service Check DERP systemd in an isolated container' 'e2e-systemd    Check all three roles with real systemd units' 'e2e-status     Show E2E services' 'e2e-down       Stop E2E, preserving volumes and credentials'
 
 setup:
 	python3 -m venv local/.venv
@@ -43,6 +43,9 @@ e2e-exit:
 
 e2e-derp-service:
 	$(PYTHON) tests/e2e/derp_service.py
+
+e2e-systemd: e2e-derp-service
+	$(PYTHON) tests/e2e/control_node_service.py
 
 e2e-status:
 	$(PYTHON) tests/e2e/e2e.py status

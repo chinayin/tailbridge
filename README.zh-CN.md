@@ -31,17 +31,17 @@ Headscale 管理设备与访问策略。设备使用 WireGuard 加密通信，�
 取得节点注册密钥后，在各 Linux 设备上执行远程安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env SERVER_URL=https://tailbridge.example.net \
-    NODE_AUTHKEY='<node-auth-key>' \
-    sh -s -- --role node
+sudo env SERVER_URL=https://tailbridge.example.net \
+  NODE_AUTHKEY='<node-auth-key>' \
+  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+    sh -s -- --role node'
 ```
 
 将地址和密钥替换为实际值。新设备需获得访问授权才能互通；策略与出口配置见[运维说明](docs/OPERATIONS.md)。
 
 ## 环境变量
 
-变量放在管道后的 `sudo env` 中，安装器将服务配置写入文件，不自动读取 `.env`。服务读取方式见[配置持久化](docs/INSTALL.md#配置持久化)。
+变量通过 `sudo env` 传入，调用方式见[共用准备](docs/INSTALL.md#共用准备)；安装器将服务配置写入文件，不自动读取 `.env`，服务读取方式见[配置持久化](docs/INSTALL.md#配置持久化)
 
 | 变量 | 角色 | 默认值 | 用途 |
 | --- | --- | --- | --- |

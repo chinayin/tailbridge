@@ -6,11 +6,11 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
 
 from e2e import Parser, run
 from settings import load_config, PROJECT_ROOT, ROOT
+from systemd_test import SystemdTest, passed, require
 
 HOSTNAME = "derp.service.test"
 CERT_DIR = "/etc/derper/certs"
@@ -75,40 +75,10 @@ assert response[:2] == b"\x01\x01" and response[8:20] == transaction, "Invalid S
 '''
 
 
-def require(condition, message):
-    if not condition:
-        raise RuntimeError(message)
-
-
-def passed(message):
-    print(f"[PASS] {message}", file=sys.stderr, flush=True)
-
-
-class ServiceTest:
+class ServiceTest(SystemdTest):
     def __init__(self, container, version):
-        self.container = container
+        super().__init__(container)
         self.version = version
-
-    def exec(self, *args, **kwargs):
-        return run(["docker", "exec", self.container, *args], **kwargs)
-
-    def wait(self, check, description, timeout=30):
-        deadline = time.monotonic() + timeout
-        last_error = ""
-        while time.monotonic() < deadline:
-            try:
-                if check():
-                    return
-            except (RuntimeError, subprocess.TimeoutExpired) as error:
-                last_error = str(error)
-            time.sleep(0.5)
-        raise RuntimeError(f"Timed out waiting for {description}: {last_error}")
-
-    def boot(self):
-        self.wait(lambda: self.exec("systemctl", "is-system-running", check=False).stdout.strip()
-                  in {"running", "degraded"}, "systemd boot")
-        require(self.exec("cat", "/proc/1/comm").stdout.strip() == "systemd", "PID 1 is not systemd")
-        self.exec("systemctl", "start", "systemd-journald")
 
     def templates(self):
         run(["docker", "exec", "-d", self.container, "python3", "-m", "http.server", "8080",
@@ -253,9 +223,9 @@ def main():
     version = run(["docker", "exec", source, "/usr/local/bin/derper", "--version"]).stdout.strip()
     require(re.fullmatch(r"\d+\.\d+\.\d+(?:-ERR-BuildInfo)?", version), f"Unexpected derper version: {version}")
     version = version.removesuffix("-ERR-BuildInfo")
-    image = f"{config.project}-derp-systemd-test"
+    image = f"{config.project}-systemd-test"
     run(["docker", "build", "--build-arg", f"RUNTIME_IMAGE={config.project}-runtime",
-         "-f", str(ROOT / "derp-systemd.Dockerfile"), "-t", image, str(ROOT)], capture=False, timeout=600)
+         "-f", str(ROOT / "systemd.Dockerfile"), "-t", image, str(ROOT)], capture=False, timeout=600)
     container = f"tailbridge-derper-service-{uuid.uuid4().hex[:12]}"
     attempted = False
     created = False
@@ -276,11 +246,20 @@ def main():
         if created:
             for command in (["docker", "logs", "--tail", "40", container],
                             ["docker", "exec", container, "journalctl", "-u", "derper", "-n", "40", "--no-pager"]):
-                run(command, capture=False, check=False)
+                try:
+                    run(command, capture=False, check=False)
+                except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                    print(f"Warning: diagnostics unavailable for {container}", file=sys.stderr)
         raise
     finally:
         if attempted:
-            run(["docker", "rm", "--force", container], check=created)
+            failing = sys.exc_info()[0] is not None
+            try:
+                run(["docker", "rm", "--force", container], check=created)
+            except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                if not failing:
+                    raise
+                print(f"Warning: could not remove test container {container}", file=sys.stderr)
     passed("isolated test container and temporary files removed")
 
 

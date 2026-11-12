@@ -31,17 +31,17 @@ The installer supports Ubuntu 26.04 on `amd64` and `arm64`. Follow the [installa
 Obtain a node authentication key, then run on each Linux device:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env SERVER_URL=https://tailbridge.example.net \
-    NODE_AUTHKEY='<node-auth-key>' \
-    sh -s -- --role node
+sudo env SERVER_URL=https://tailbridge.example.net \
+  NODE_AUTHKEY='<node-auth-key>' \
+  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+    sh -s -- --role node'
 ```
 
 Replace the URL and key with your own. New devices require access grants before they can communicate; see [operations](docs/OPERATIONS.md) for policies and exit routing.
 
 ## Environment variables
 
-Pass variables to `sudo env` after the pipe. The installer writes service configuration to disk; `.env` files are not loaded automatically. See [persistent configuration](docs/INSTALL.md#配置持久化).
+Pass variables through `sudo env`; see [invocation details](docs/INSTALL.md#共用准备). The installer writes service configuration to disk; `.env` files are not loaded automatically. See [persistent configuration](docs/INSTALL.md#配置持久化).
 
 | Variable | Role | Default | Purpose |
 | --- | --- | --- | --- |

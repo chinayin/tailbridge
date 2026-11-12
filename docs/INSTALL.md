@@ -6,10 +6,13 @@
 
 ## 共用准备
 
-在目标机通过远程安装器执行，参数放在 `sh -s --` 后，环境变量放在管道后的 `sudo env` 中。例如查看帮助：
+在目标机通过远程安装器执行，参数放在 `sh -s --` 后，环境变量通过 `sudo env` 一次传入，供下载和安装共享；外层 Bash 启用 `pipefail`，使下载或安装失败时整个命令返回非零，安装器仍由 `sh` 执行
+
+例如查看帮助：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | sh -s -- --help
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sh -s -- --help'
 ```
 
 control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.com/chinayin/tailbridge/main`，省略或空值均使用默认值。仅镜像、自托管或固定分支 / tag 时覆盖，并让安装器下载地址与模板根地址指向同一份源码；该地址下须同时包含 `install.sh` 和 `files/`。`curl | sh` 不会将下载 URL 传给脚本，不能自动推导镜像地址。
@@ -24,13 +27,13 @@ control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.c
 
 ### 下载代理
 
-通过 `sudo env` 一次传入配置，让下载和安装共享环境变量；`curl` 使用 `-x` 读取代理：
+在上述调用方式中增加 `PROXY`，`curl` 使用 `-x` 读取代理：
 
 ```bash
 sudo env PROXY=http://127.0.0.1:7890 \
   SERVER_URL=https://tailbridge.example.net NODE_AUTHKEY='<首次注册密钥>' \
-  sh -c 'curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-         sh -s -- --role node'
+  bash -o pipefail -c 'curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+    sh -s -- --role node'
 ```
 
 三个角色均支持 `PROXY=http(s)://[用户:密码@]主机[:端口]`，作用于 curl、apt 和 Go 下载，不写入系统或服务配置。`127.0.0.1` 指执行安装的目标机；容器或远程服务器须使用它能访问的代理地址。
@@ -103,13 +106,13 @@ sudo systemctl restart derper
 以下使用自动证书，先替换地址、域名和邮箱：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env SERVER_URL=https://tailbridge.example.net BASE_DOMAIN=tb.example.net \
-    ACME_EMAIL=ops@example.net TLS_HOSTNAME=tailbridge.example.net \
-    DERP_REGION_ID=910 DERP_REGION_CODE=ap-east-1 DERP_REGION_NAME='Hong Kong' \
-    DERP_NODE_NAME=tb-derp-hk-01 \
-    DERP_HOSTNAME=tb-derp-hk-01.example.net \
-    sh -s -- --role control --dry-run
+sudo env SERVER_URL=https://tailbridge.example.net BASE_DOMAIN=tb.example.net \
+  ACME_EMAIL=ops@example.net TLS_HOSTNAME=tailbridge.example.net \
+  DERP_REGION_ID=910 DERP_REGION_CODE=ap-east-1 DERP_REGION_NAME='Hong Kong' \
+  DERP_NODE_NAME=tb-derp-hk-01 \
+  DERP_HOSTNAME=tb-derp-hk-01.example.net \
+  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+    sh -s -- --role control --dry-run'
 ```
 
 确认计划后去掉 `--dry-run` 执行。同机部署中继时增加 `DERP_PORT=8443`。文件证书模式将 `ACME_EMAIL` / `TLS_HOSTNAME` 替换为 `TLS_CERT_PATH=/etc/ssl/control/fullchain.pem` 和 `TLS_KEY_PATH=/etc/ssl/control/privkey.pem`。
@@ -142,10 +145,10 @@ curl -fsS https://tailbridge.example.net/health
 ### 安装与检查
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env SERVER_URL=https://tailbridge.example.net \
-    DERP_HOSTNAME=tb-derp-hk-01.example.net \
-    sh -s -- --role derp --dry-run
+sudo env SERVER_URL=https://tailbridge.example.net \
+  DERP_HOSTNAME=tb-derp-hk-01.example.net \
+  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+    sh -s -- --role derp --dry-run'
 ```
 
 确认计划后去掉 `--dry-run` 执行。同机部署时增加 `DERP_PORT=8443`，control 的 Map 也须填写相同端口；修改 Map 不会更改中继监听。
@@ -207,10 +210,15 @@ sudo journalctl -u derper -n 50 --no-pager
 先按 [REST API 的用户与注册密钥流程](API.md#用户与注册密钥)签发单次使用的 key，再通过已有安全通道传给待安装节点。安装器不会自动向未注册设备下发密钥。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | \
-  sudo env SERVER_URL=https://tailbridge.example.net \
-    NODE_AUTHKEY='<首次注册密钥>' \
-    sh -s -- --role node
+sudo env SERVER_URL=https://tailbridge.example.net \
+  NODE_AUTHKEY='<首次注册密钥>' \
+  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+    sh -s -- --role node'
+```
+
+安装成功后检查连接：
+
+```bash
 sudo tailscale status
 sudo tailscale netcheck
 ```
