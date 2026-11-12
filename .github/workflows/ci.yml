@@ -31,9 +31,14 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install dependencies
+        env:
+          SHELLCHECK_VERSION: v0.11.0
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck
+          curl -fsSL --retry 3 "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" -o "${RUNNER_TEMP}/shellcheck.tar.xz"
+          printf '%s  %s\n' '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198' "${RUNNER_TEMP}/shellcheck.tar.xz" | sha256sum --check
+          tar -xJf "${RUNNER_TEMP}/shellcheck.tar.xz" -C "${RUNNER_TEMP}"
+          sudo install -m 755 "${RUNNER_TEMP}/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
           make setup
       - name: Lint
         run: make lint
