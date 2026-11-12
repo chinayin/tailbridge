@@ -377,6 +377,7 @@ with open(os.environ['TEST_APT_ENV'], 'a') as f:
         self.stub('chown', 'pass')
         self.stub('chgrp', 'pass')
         self.stub('runuser', 'os.execvp(sys.argv[4], sys.argv[4:])')
+        self.stub('systemd-analyze', 'assert sys.argv[1] == "verify"; assert Path(sys.argv[2]).is_file()')
         self.stub('systemctl', '''
 with open(os.environ['TEST_SYSTEMCTL'], 'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
 if sys.argv[1]=='is-active': raise SystemExit(0 if os.environ.get('TEST_ACTIVE')=='1' else 3)
@@ -521,6 +522,27 @@ os.execv('/bin/mv', ['/bin/mv', *sys.argv[1:]])
             with self.subTest(name=name, value=value):
                 self.run_install('--dry-run', role='derp', changes={name: value}, expected=1)
                 self.assertFalse(self.prefix.exists())
+
+    def test_derp_rejects_hostname_mismatch_when_openssl_exits_zero(self):
+        changes = self.derp_fixture()
+        openssl = shutil.which('openssl')
+        self.stub('openssl', f'''
+if '-checkhost' in sys.argv:
+    print('Hostname derp.example.test does NOT match certificate')
+    raise SystemExit(0)
+os.execv({openssl!r}, [{openssl!r}, *sys.argv[1:]])
+''')
+        self.run_install(role='derp', changes=changes, expected=1)
+        self.assertFalse((self.prefix / 'etc/derper/derper.conf').exists())
+        self.assertFalse((self.prefix / 'etc/systemd/system/derper.service').exists())
+
+    def test_derp_rejects_invalid_service_unit_before_publication(self):
+        changes = self.derp_runtime()
+        self.stub('systemd-analyze', 'raise SystemExit(1)')
+        self.run_install(role='derp', changes=changes, expected=1)
+        self.assertFalse((self.prefix / 'etc/derper/derper.conf').exists())
+        self.assertFalse((self.prefix / 'etc/systemd/system/derper.service').exists())
+        self.assertFalse((self.base / 'systemctl').exists())
 
     def test_derp_enables_service_and_only_restarts_changed_configuration(self):
         changes = self.derp_runtime()

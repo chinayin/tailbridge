@@ -2,7 +2,7 @@
 # Install official components on the target; read templates from files/
 set -eu
 
-VERSION=0.5.2
+VERSION=0.5.3
 HEADSCALE_VERSION=0.29.7
 TAILSCALE_VERSION=1.104.5
 INSTALL_BASE_URL=${INSTALL_BASE_URL:-https://raw.githubusercontent.com/chinayin/tailbridge/main}
@@ -524,7 +524,9 @@ install_derp() {
     # Go rejects legacy CN-only certificates even when OpenSSL accepts them
     openssl x509 -in "${cert}" -noout -ext subjectAltName > "${TMP}/cert.san" || die 'invalid DERP certificate'
     grep -q 'DNS:' "${TMP}/cert.san" || die 'DERP certificate requires a DNS subjectAltName'
-    openssl x509 -in "${cert}" -noout -checkhost "${DERP_HOSTNAME}" > /dev/null || die 'DERP certificate hostname mismatch'
+    # Older OpenSSL versions can exit successfully for a hostname mismatch
+    openssl x509 -in "${cert}" -noout -checkhost "${DERP_HOSTNAME}" > "${TMP}/cert.host" || die 'DERP certificate hostname mismatch'
+    grep -Fxq "Hostname ${DERP_HOSTNAME} does match certificate" "${TMP}/cert.host" || die 'DERP certificate hostname mismatch'
     openssl x509 -in "${cert}" -noout -pubkey > "${TMP}/cert.pub" || die 'cannot read DERP certificate'
     openssl pkey -in "${key}" -passin pass: -pubout > "${TMP}/key.pub" 2>/dev/null || die 'invalid DERP private key'
     cmp -s "${TMP}/cert.pub" "${TMP}/key.pub" || die 'DERP certificate and key do not match'
