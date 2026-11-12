@@ -75,12 +75,14 @@ if [[ "${ADVERTISE_EXIT_NODE}" == true ]]; then
 fi
 
 if [[ "${TB_NODE_ROLE}" == server ]]; then
+  # Bind mounts retain the host UID; sshd requires root-owned authorized keys
+  install -o root -g root -m 600 /etc/tailbridge/ssh/authorized_keys /run/tailbridge/authorized_keys
   tail_ip="$(tailscale ip -4)"
   cat > /run/tailbridge/sshd.conf <<EOF
 Port 22
 ListenAddress ${tail_ip}
 HostKey /run/secrets/ssh_host_key
-AuthorizedKeysFile /etc/tailbridge/ssh/authorized_keys
+AuthorizedKeysFile /run/tailbridge/authorized_keys
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 KbdInteractiveAuthentication no
