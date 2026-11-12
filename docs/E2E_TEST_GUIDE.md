@@ -17,6 +17,12 @@ make e2e-basic         # 基础网络检查
 
 WebUI 入口为 <http://127.0.0.1:3000/admin>，登录密钥位于 `local/e2e/generated/headplane-api-key`。全部命令见 `make help`。
 
+## GitHub Actions
+
+[CI](https://github.com/chinayin/tailbridge/actions/workflows/ci.yml) 在 main 推送和 PR 时运行 `make test`、`make lint`。在 Actions 中选择 **Run workflow**，勾选 **Run full network and systemd E2E**，会额外创建全新测试环境，执行完整网络及三个角色的 systemd 验收。
+
+测试环境不需要仓库密钥。E2E 报告作为 `e2e-reports` 保留 7 天，仅上传报告文件，不包含配置、证书或身份目录；结束时停止测试环境。
+
 ## 部署和测试的关系
 
 `compose.yaml` 是完整静态编排。Ubuntu 镜像只安装系统工具，`start.sh` 调用根目录 `install.sh` 安装组件。`installer-files` 提供安装器和 `files/` 模板，配置在目标容器替换并校验。本机 `e2e.py` 准备测试证书、SSH 凭据和可选 UI 配置。
