@@ -40,7 +40,7 @@ tailscale set --exit-node=tb-node-jp-01 --exit-node-allow-lan-access=true
 tailscale set --exit-node=
 ```
 
-上述命令保留当前局域网访问；需要隔离本地 LAN 时改为 `false`。这不授予出口侧子网访问权限。Mac 在 **Settings → Exit Nodes** 勾选 **Allow local network access**；通过菜单的 **Exit Node** 切换出口，选 **None** 取消。
+上述设置会保存，重启后仍生效。`true` 让当前局域网流量直接走本地网络；需要限制本地 LAN 访问时改为 `false`。这不授予出口侧子网访问权限。Mac 在 **Settings → Exit Nodes** 勾选 **Allow local network access**；通过菜单的 **Exit Node** 切换出口，选 **None** 取消。
 
 临时断开或恢复尾网连接，不删除注册身份：
 

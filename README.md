@@ -75,7 +75,6 @@ Detailed guides are currently in Chinese.
 - [Architecture](docs/ARCHITECTURE.md) · [Design decisions](docs/DESIGN_PROPOSAL.md)
 - [Node naming](docs/NODE_NAMING.md)
 - [Operations](docs/OPERATIONS.md)
-- [Exit node audit and remediation](docs/EXIT_NODE_AUDIT.md)
 - [Local setup and E2E testing](docs/E2E_TEST_GUIDE.md)
 
 ## License

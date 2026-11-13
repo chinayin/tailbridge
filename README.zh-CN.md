@@ -73,7 +73,6 @@ control 的自动证书与文件证书二选一；derp 使用文件证书。两�
 - [项目架构](docs/ARCHITECTURE.md) · [设计决策](docs/DESIGN_PROPOSAL.md)
 - [节点命名](docs/NODE_NAMING.md)
 - [运维](docs/OPERATIONS.md)
-- [出口节点审计与整改](docs/EXIT_NODE_AUDIT.md)
 - [本机体验与 E2E](docs/E2E_TEST_GUIDE.md)
 
 ## 开源协议

@@ -43,7 +43,7 @@ sudo systemctl restart derper
 
 退役时先发布不含旧节点的 Map，确认客户端切换，再停止旧中继。控制面维护会影响中继的新接入校验，应安排维护窗口。
 
-访问策略以 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），REST API 不写策略。按用户、设备和目标端口授权，修改后执行 `sudo -u headscale headscale policy check --file /etc/headscale/policy.hujson`，通过后用 `sudo systemctl kill --signal=HUP --kill-who=main headscale` 重载，再验证允许与拒绝两种情况。节点注册、撤销和路由批准通过 [管理 API](API.md) 分别处理。
+访问策略以控制面实际加载的 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），仓库模板不能代表运行中的授权；REST API 不写策略。按用户、设备和目标端口授权，修改后执行 `sudo -u headscale headscale policy check --file /etc/headscale/policy.hujson`，通过后用 `sudo systemctl kill --signal=HUP --kill-who=main headscale` 重载，再验证允许与拒绝两种情况。节点注册、撤销和路由批准通过 [管理 API](API.md) 分别处理。
 
 ## 重启控制面
 
@@ -83,4 +83,8 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 
 排查顺序：出口转发与路由发布 → 控制面批准 → `autogroup:internet` 授权 → 客户端选择 → 直连 / DERP 路径 → HTTP 源地址。分别检查 IPv4、IPv6、公共 DNS 和 MagicDNS。
 
-`make e2e-exit` 验证模拟双栈出口、拒绝与故障恢复；执行前取消手动选择的出口。测试会恢复选择、LAN 偏好和服务；完整 `make e2e-test` 另测经 DERP 的出口流量。出口故障反例不等于系统级防泄漏保证，真实 Mac 换网与休眠仍待验。
+使用出口时，Tailscale 默认通过出口解析公共域名。DNS 故障先检查出口的解析能力及客户端是否启用 Tailscale DNS，MagicDNS 单独验证。[DNS 与出口](https://tailscale.com/docs/reference/dns-in-tailscale#nameservers-and-exit-nodes)
+
+IPv6 故障先检查出口的公网 IPv6 地址、默认路由和云侧放行，再分别用 `curl -4`、`curl -6` 访问同一双栈目标。`--accept-routes=false` 只关闭子网路由接收，不会关闭出口默认路由。[参数定义](https://github.com/tailscale/tailscale/blob/v1.104.5/ipn/prefs.go)
+
+自动验证见 [E2E 出口测试](E2E_TEST_GUIDE.md#http-出口测试拓扑)；测试覆盖与实际环境验收见[验证范围](E2E_TEST_GUIDE.md#报告与验证范围)。
