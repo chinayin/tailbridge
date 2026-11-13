@@ -28,8 +28,8 @@ class ExitPolicyTests(unittest.TestCase):
 
 
 class SelectionCleanupTests(unittest.TestCase):
-    def exercise(self, failure):
-        state = {"ExitNodeID": "", "ExitNodeIP": "", "ExitNodeAllowLANAccess": True}
+    def exercise(self, failure, *, lan=True):
+        state = {"ExitNodeID": "", "ExitNodeIP": "", "ExitNodeAllowLANAccess": lan}
 
         def node(service, *args, **kwargs):
             self.assertEqual(service, "client-macbook")
@@ -48,6 +48,7 @@ class SelectionCleanupTests(unittest.TestCase):
         with patch.object(verify, "node", side_effect=node):
             try:
                 with verify.selected_exit("client-macbook", "100.77.0.1"):
+                    self.assertTrue(state["ExitNodeAllowLANAccess"])
                     if failure == "body_failure":
                         raise AssertionError("HTTP failed")
             except (AssertionError, RuntimeError, subprocess.TimeoutExpired):
@@ -57,10 +58,13 @@ class SelectionCleanupTests(unittest.TestCase):
                     raise
             else:
                 self.assertIsNone(failure)
-        self.assertEqual(state, {"ExitNodeID": "", "ExitNodeIP": "", "ExitNodeAllowLANAccess": True})
+        self.assertEqual(state, {"ExitNodeID": "", "ExitNodeIP": "", "ExitNodeAllowLANAccess": lan})
 
     def test_selection_is_restored_after_success(self):
         self.exercise(None)
+
+    def test_selection_enables_lan_and_restores_disabled_preference(self):
+        self.exercise(None, lan=False)
 
     def test_selection_timeout_after_mutation_still_restores_preferences(self):
         self.exercise("selection_timeout")

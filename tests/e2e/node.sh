@@ -70,9 +70,7 @@ else
     --accept-dns=true --accept-routes=false --timeout=45s
 fi
 
-if [[ "${ADVERTISE_EXIT_NODE}" == true ]]; then
-  timeout 45 tailscale set --advertise-exit-node
-fi
+timeout 45 tailscale set "--advertise-exit-node=${ADVERTISE_EXIT_NODE}"
 
 if [[ "${TB_NODE_ROLE}" == server ]]; then
   # Bind mounts retain the host UID; sshd requires root-owned authorized keys

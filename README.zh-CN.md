@@ -26,18 +26,20 @@ Headscale 管理设备与访问策略。设备使用 WireGuard 加密通信，�
 
 ## 如何使用
 
-安装器支持 Ubuntu 26.04（`amd64` / `arm64`）。先按[安装说明](docs/INSTALL.md)部署 `control` 和至少一个 `derp`，两者可以同机。
+Bash 安装器支持 Ubuntu 26.04（`amd64` / `arm64`）。先按[安装说明](docs/INSTALL.md)部署 `control` 和至少一个 `derp`，两者可以同机。
 
 取得节点注册密钥后，在各 Linux 设备上执行远程安装：
 
 ```bash
-sudo env SERVER_URL=https://tailbridge.example.net \
-  NODE_AUTHKEY='<node-auth-key>' \
-  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-    sh -s -- --role node'
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sudo env SERVER_URL=https://tailbridge.example.net \
+    NODE_AUTHKEY='<node-auth-key>' \
+    bash -s -- --role node
 ```
 
 将地址和密钥替换为实际值。新设备需获得访问授权才能互通；策略与出口配置见[运维说明](docs/OPERATIONS.md)。
+
+Mac / Linux 的接入、日常使用、出口切换和连通性测试见[客户端指南](docs/CLIENTS.md)。
 
 ## 环境变量
 
@@ -59,17 +61,19 @@ sudo env SERVER_URL=https://tailbridge.example.net \
 | `DERP_IPV4` | control | — | 可选中继 IPv4 地址；留空时使用 DNS |
 | `NODE_AUTHKEY` | node | — | 新设备首次注册所需的密钥 |
 | `NODE_HOSTNAME` | node | 本机 hostname | 首次注册时的设备名称 |
-| `ADVERTISE_EXIT_NODE` | node | `false` | 开启转发并宣告出口；仍需控制面批准和访问授权 |
+| `ADVERTISE_EXIT_NODE` | node | 未设置 | 开启或撤销出口宣告；[开关行为](docs/INSTALL.md#node-设备) |
 
 control 的自动证书与文件证书二选一；derp 使用文件证书。两个角色须填写相同的中继域名和端口。完整要求、示例和安全组端口见[安装说明](docs/INSTALL.md)。
 
 ## 相关文档
 
 - [安装与配置](docs/INSTALL.md)
+- [Mac / Linux 客户端](docs/CLIENTS.md)
 - [REST 管理 API](docs/API.md)
 - [项目架构](docs/ARCHITECTURE.md) · [设计决策](docs/DESIGN_PROPOSAL.md)
 - [节点命名](docs/NODE_NAMING.md)
 - [运维](docs/OPERATIONS.md)
+- [出口节点审计与整改](docs/EXIT_NODE_AUDIT.md)
 - [本机体验与 E2E](docs/E2E_TEST_GUIDE.md)
 
 ## 开源协议

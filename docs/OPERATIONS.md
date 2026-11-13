@@ -58,9 +58,9 @@ sudo systemctl restart derper
 出口机器必须能访问目标网络。已接入的 Linux 节点执行：
 
 ```bash
-sudo env SERVER_URL=https://tailbridge.example.net ADVERTISE_EXIT_NODE=true \
-  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-    sh -s -- --role node'
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sudo env SERVER_URL=https://tailbridge.example.net ADVERTISE_EXIT_NODE=true \
+    bash -s -- --role node
 ```
 
 首次安装还需注册密钥；参数及无 systemd 的处理见[安装说明](INSTALL.md#node-设备)。脚本写入 `/etc/sysctl.d/99-tailbridge-exit-node.conf` 并立即开启转发。IP 转发是 Linux 出口的必需项，不是性能优化；默认 netfilter 模式由 Tailscale 管理转发与 NAT 规则，无需手工全局放开 iptables。自定义防火墙仍需允许所需流量，脚本不会清空或改写其规则。[IP 转发要求](https://tailscale.com/docs/reference/troubleshooting/network-configuration/ip-forwarding-errors-advertise) · [netfilter 模式](https://tailscale.com/docs/reference/netfilter-modes)
@@ -79,15 +79,7 @@ sudo env SERVER_URL=https://tailbridge.example.net ADVERTISE_EXIT_NODE=true \
 
 ## 整机出口切换与排查
 
-客户端默认不选择出口。在界面选择已授权出口，选择 None 恢复本地上网；CLI 示例：
-
-```bash
-tailscale set --exit-node=tb-node-hk-01 --exit-node-allow-lan-access=false
-tailscale status
-tailscale set --exit-node=
-```
-
-用实际出口名称替换示例。部分 Linux 安装需要 sudo；Mac 可使用界面。`--exit-node-allow-lan-access=true` 仅允许客户端访问当前局域网，不代表获准访问出口侧子网。
+出口选择、取消和局域网访问设置见[客户端指南](CLIENTS.md#日常使用)。
 
 排查顺序：出口转发与路由发布 → 控制面批准 → `autogroup:internet` 授权 → 客户端选择 → 直连 / DERP 路径 → HTTP 源地址。分别检查 IPv4、IPv6、公共 DNS 和 MagicDNS。
 

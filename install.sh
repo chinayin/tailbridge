@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Install official components on the target; read templates from files/
-set -eu
+set -euo pipefail
 
-VERSION=0.5.3
+VERSION=0.6.0
 HEADSCALE_VERSION=0.29.7
 TAILSCALE_VERSION=1.104.5
 INSTALL_BASE_URL=${INSTALL_BASE_URL:-https://raw.githubusercontent.com/chinayin/tailbridge/main}
@@ -22,6 +22,7 @@ warn() { printf 'Warning: %s\n' "$*" >&2; }
 usage() {
     cat <<'EOF'
 Usage: install.sh --role control|derp|node [options]
+       install.sh test [--exit-node NAME_OR_IP]
   --headscale-version X.Y.Z   Override the Headscale version
   --tailscale-version X.Y.Z   Override the Tailscale and derper version
   --force                    Replace differing configuration (never identity)
@@ -43,8 +44,12 @@ NO_PROXY / no_proxy controls bypasses; default: localhost,127.0.0.1,::1.
 Node environment: SERVER_URL; NODE_AUTHKEY for first registration.
 NODE_HOSTNAME is optional; otherwise Tailscale uses the local hostname.
 ADVERTISE_EXIT_NODE=true enables IP forwarding and advertises an exit node;
-unset or false preserves existing settings. Route approval is separate.
-Without systemd the caller must start, register and advertise the node.
+false withdraws the advertisement while preserving IP forwarding settings.
+Unset or empty preserves existing settings. Route approval is separate.
+Without systemd the caller must start, register and apply the advertisement setting.
+Test uses existing tailscale, curl and python3; missing tools are reported as skipped.
+Test requires no installation settings. --exit-node temporarily changes this machine's
+exit selection and restores it afterward. Run it from another registered node.
 Exit codes: 0 success; 1 invalid argument/runtime failure/overwrite refused;
 2 missing prerequisite or identity requiring explicit reauthentication.
 EOF
@@ -182,9 +187,10 @@ print_plan() {
             printf '%s/%s -> official headscale service\n' "${HEADSCALE_URL}" "${HEADSCALE_FILE}" >&2 ;;
         node)
             printf '%s -> official tailscaled service; register after daemon startup\n' "${TAILSCALE_URL}" >&2
-            if [ "${ADVERTISE_EXIT_NODE:-false}" = true ]; then
-                printf 'Enable IPv4/IPv6 forwarding via %s/etc/sysctl.d/99-tailbridge-exit-node.conf; advertise exit after registration\n' "${TB_PREFIX}" >&2
-            fi ;;
+            case "${ADVERTISE_EXIT_NODE:-}" in
+                true) printf 'Enable IPv4/IPv6 forwarding via %s/etc/sysctl.d/99-tailbridge-exit-node.conf; advertise exit after registration\n' "${TB_PREFIX}" >&2 ;;
+                false) printf 'Withdraw exit advertisement after registration; preserve IP forwarding settings\n' >&2 ;;
+            esac ;;
         derp)
             printf 'https://go.dev/dl/%s; tailscale.com/cmd/derper@v%s -> /usr/local/bin/derper\n' "${GO_FILE}" "${TAILSCALE_VERSION}" >&2
             printf '%s/files/derper.service -> %s/etc/systemd/system/derper.service; enable derper\n' "${INSTALL_BASE_URL%/}" "${TB_PREFIX}" >&2
@@ -350,7 +356,7 @@ fetch_package() {
         # Defer service startup during package installation; preserve policy-rc.d
         if [ -e /usr/sbin/policy-rc.d ] || [ -L /usr/sbin/policy-rc.d ]; then mv /usr/sbin/policy-rc.d "${TMP}/policy-rc.d"; fi
         POLICY_GUARD=1
-        printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+        printf '#!/usr/bin/env bash\nexit 101\n' > /usr/sbin/policy-rc.d
         chmod 755 /usr/sbin/policy-rc.d
         chmod 755 "${TMP}"
         DEBIAN_FRONTEND=noninteractive with_proxy apt-get install -y --no-install-recommends \
@@ -602,18 +608,214 @@ install_node() {
     enable_unit tailscaled
     if [ -d "${TB_PREFIX}/run/systemd/system" ]; then
         register_node
-        if [ "${ADVERTISE_EXIT_NODE:-false}" = true ] && [ "${TB_OFFLINE}" != 1 ]; then
-            timeout 45 tailscale set --advertise-exit-node >&2 || die 'exit advertisement failed'
+        if [ -n "${ADVERTISE_EXIT_NODE:-}" ] && [ "${TB_OFFLINE}" != 1 ]; then
+            timeout 45 tailscale set "--advertise-exit-node=${ADVERTISE_EXIT_NODE}" >&2 || die 'exit advertisement update failed'
         fi
     else
         warn 'node installed; registration must follow daemon startup'
-        if [ "${ADVERTISE_EXIT_NODE:-false}" = true ]; then
-            warn 'forwarding enabled; caller must run tailscale set --advertise-exit-node after registration'
+        if [ -n "${ADVERTISE_EXIT_NODE:-}" ]; then
+            warn "caller must run tailscale set --advertise-exit-node=${ADVERTISE_EXIT_NODE} after registration"
         fi
     fi
 }
 
+test_node() {
+    local exit_node='' tool
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --exit-node)
+                [ "$#" -ge 2 ] && [ -n "$2" ] || die '--exit-node requires a name or IP'
+                exit_node=$2; shift 2 ;;
+            --exit-node=*)
+                exit_node=${1#*=}
+                [ -n "${exit_node}" ] || die '--exit-node requires a name or IP'
+                shift ;;
+            -h|--help)
+                printf '%s\n' 'Usage: install.sh test [--exit-node NAME_OR_IP]' \
+                    'Check this node, or compare IPv4 access with an exit and restore the original selection.' \
+                    'Allow local LAN access while using the test exit; restore the saved preference afterward.' \
+                    'Uses existing tailscale, curl and python3; missing tools skip the test.'
+                return ;;
+            *) die "unknown test argument: ${1}" ;;
+        esac
+    done
+    for tool in tailscale curl python3; do
+        if ! command -v "${tool}" >/dev/null 2>&1; then
+            printf '[SKIP] %s is not installed; no changes made\n' "${tool}" >&2
+            return 0
+        fi
+    done
+    python3 - "${exit_node}" <<'PY'
+import concurrent.futures
+import ipaddress
+import json
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+
+
+def run(args, timeout=20):
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+
+def tailscale(*args):
+    result = run(['tailscale', *args])
+    if result.returncode:
+        raise RuntimeError('tailscale ' + ' '.join(args) + ' failed; check daemon access and permissions')
+    return result.stdout
+
+
+def read_json(*args):
+    try:
+        value = json.loads(tailscale(*args))
+        if not isinstance(value, dict):
+            raise ValueError()
+        return value
+    except ValueError:
+        raise RuntimeError('Cannot parse Tailscale status or preferences') from None
+
+
+def peer_ip(peer):
+    addresses = peer.get('TailscaleIPs') or []
+    if not addresses:
+        raise RuntimeError('Exit node has no tailnet IP')
+    return next((ip for ip in addresses if ipaddress.ip_address(ip).version == 4), addresses[0])
+
+
+def selection(prefs, peers):
+    lan = prefs.get('ExitNodeAllowLANAccess')
+    if not isinstance(lan, bool):
+        raise RuntimeError('Cannot read the saved LAN access setting')
+    if prefs.get('AutoExitNode'):
+        return 'auto:' + prefs['AutoExitNode'], lan
+    if prefs.get('ExitNodeID'):
+        previous = next((p for p in peers if p.get('ID') == prefs['ExitNodeID']), None)
+        if previous is None:
+            raise RuntimeError('Saved exit is unavailable; cannot guarantee restoration')
+        return peer_ip(previous), lan
+    return prefs.get('ExitNodeIP') or '', lan
+
+
+def set_exit(target, lan):
+    tailscale('set', '--exit-node=' + target, '--exit-node-allow-lan-access=' + str(lan).lower())
+
+
+def probe(item, directory):
+    label, url = item
+    body = Path(directory) / label
+    result = run(['curl', '-q', '-4', '--noproxy', '*', '--silent', '--show-error', '--location',
+                  '--connect-timeout', '5', '--max-time', '10', '--output', str(body),
+                  '--write-out', '%{json}', url], timeout=15)
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        data = {}
+    status = data.get('http_code', 0)
+    address = ''
+    if label.startswith('ip-') and result.returncode == 0 and status == 200:
+        text = body.read_text()[:1000]
+        match = re.search(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])', text)
+        try:
+            address = str(ipaddress.IPv4Address(match.group(0))) if match else ''
+        except ValueError:
+            pass
+    outcome = 'HTTP ' + str(status) if result.returncode == 0 else 'ERROR ' + str(result.returncode)
+    return label, outcome, address, data.get('time_total', 0)
+
+
+def measure(mode):
+    targets = [('ip-aws', 'https://checkip.amazonaws.com'), ('ip-ipify', 'https://api.ipify.org'),
+               ('ip-ipip', 'https://myip.ipip.net'), ('baidu', 'https://www.baidu.com/'),
+               ('google', 'https://www.google.com/generate_204')]
+    with tempfile.TemporaryDirectory(prefix='tailbridge-test-') as directory:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as pool:
+            results = list(pool.map(lambda item: probe(item, directory), targets))
+    for label, outcome, address, seconds in results:
+        print(f'{mode:<14} {label:<10} {outcome:<12} {address or "-":<16} {seconds:.3f}s', flush=True)
+    return any(address for _, _, address, _ in results)
+
+
+def interrupted(signum, frame):
+    raise InterruptedError('Test interrupted')
+
+
+def main():
+    status = read_json('status', '--json')
+    if status.get('BackendState') != 'Running':
+        raise RuntimeError('Tailscale is not running and registered; connect this machine first')
+    target = sys.argv[1]
+    peers = list((status.get('Peer') or {}).values())
+    if target:
+        if status.get('TUN') is not True:
+            raise RuntimeError('Exit comparison requires a system TUN interface; userspace proxy mode is unsupported')
+        matches = [p for p in peers if target.lower().rstrip('.') in
+                   {str(value).lower().rstrip('.') for value in
+                    [p.get('HostName', ''), p.get('DNSName', ''),
+                     p.get('DNSName', '').split('.')[0], *(p.get('TailscaleIPs') or [])]}]
+        if len(matches) != 1 or not matches[0].get('ExitNodeOption') or not matches[0].get('Online'):
+            raise RuntimeError('Target must be an online approved exit on another node')
+        target_ip = peer_ip(matches[0])
+        original = selection(read_json('debug', 'prefs'), peers)
+    print('[PASS] Tailscale is running', file=sys.stderr)
+    print(tailscale('netcheck'), file=sys.stderr, end='')
+    print(f'{"MODE":<14} {"TARGET":<10} {"RESULT":<12} {"PUBLIC IPv4":<16} TIME', flush=True)
+    if not target:
+        if not measure('current'):
+            raise RuntimeError('No public IPv4 check succeeded; see individual HTTP results')
+        return
+
+    original_connected = measure('original') if original[0] else None
+    # Arm restoration before a command that may mutate preferences and then fail
+    try:
+        set_exit('', original[1])
+        if selection(read_json('debug', 'prefs'), peers) != ('', original[1]):
+            raise RuntimeError('Could not clear the exit selection for the baseline')
+        baseline_connected = measure('without-exit')
+        if original_connected is None:
+            original_connected = baseline_connected
+        set_exit(target_ip, True)
+        if selection(read_json('debug', 'prefs'), peers) != (target_ip, True):
+            raise RuntimeError('Requested exit selection did not take effect')
+        connected = measure('exit-node')
+    finally:
+        signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in signals}
+        try:
+            set_exit(*original)
+            if selection(read_json('debug', 'prefs'), peers) != original:
+                raise RuntimeError('Saved exit settings were not restored')
+            print('[PASS] Original exit selection and LAN access restored', file=sys.stderr)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError('Failed to restore exit settings; check tailscale debug prefs') from error
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+    restored_connected = measure('restored')
+    if original_connected and not restored_connected:
+        raise RuntimeError('Original network access did not recover after restoring exit settings')
+    if not connected:
+        raise RuntimeError('No public IPv4 check succeeded through the selected exit')
+    print('[PASS] Exit comparison completed (IPv4)', file=sys.stderr)
+
+
+for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(sig, interrupted)
+try:
+    main()
+except InterruptedError:
+    print('[FAIL] Test interrupted', file=sys.stderr)
+    sys.exit(130)
+except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+    print('[FAIL] ' + str(error), file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 main() {
+    if [ "${1:-}" = test ]; then shift; test_node "$@"; return; fi
     parse_args "$@"
     detect_arch
     validate_inputs

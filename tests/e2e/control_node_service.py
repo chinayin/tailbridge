@@ -24,7 +24,7 @@ class ControlNodeTest(SystemdTest):
 
     def prepare(self):
         self.boot()
-        self.exec("sh", "-c", "! command -v headscale && ! command -v tailscaled")
+        self.exec("bash", "-c", "! command -v headscale && ! command -v tailscaled")
         self.exec("install", "-d", "-m", "755", "/etc/headscale/certs")
         self.exec("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
                   "-subj", f"/CN={HOSTNAME}", "-addext", f"subjectAltName=DNS:{HOSTNAME}",
@@ -61,7 +61,7 @@ class ControlNodeTest(SystemdTest):
         # Keep registration and proxy credentials out of command arguments and timeout errors
         return run(["docker", "exec", "-i", self.container, "python3", "-c",
                     "import json,os,sys; settings=json.load(sys.stdin); "
-                    "os.execvpe('sh',['sh','/source/install.sh','--role',sys.argv[1]],{**os.environ,**settings})", role],
+                    "os.execvpe('bash',['bash','/source/install.sh','--role',sys.argv[1]],{**os.environ,**settings})", role],
                    input=json.dumps(environment), timeout=1800, check=check)
 
     def pid(self, unit):
@@ -105,6 +105,42 @@ class ControlNodeTest(SystemdTest):
                          "/etc/headscale/policy.hujson", "/etc/default/tailscaled",
                          "/usr/lib/systemd/system/headscale.service",
                          "/lib/systemd/system/tailscaled.service").stdout
+
+    def exit_advertisement(self, baseline):
+        defaults = {"0.0.0.0/0", "::/0"}
+        subnet = "192.0.2.0/24"
+        self.exec("tailscale", "set", f"--advertise-routes={subnet}")
+
+        def routes_match(expected):
+            prefs = json.loads(self.exec("tailscale", "debug", "prefs").stdout)
+            nodes = self.headscale("nodes", "list")
+            return (set(prefs.get("AdvertiseRoutes") or []) == expected
+                    and len(nodes) == 1 and set(nodes[0].get("available_routes") or []) == expected)
+
+        self.install("node", ADVERTISE_EXIT_NODE="true")
+        self.wait(lambda: routes_match(defaults | {subnet}), "exit advertisement reaches control")
+        forwarding = self.exec("cat", "/etc/sysctl.d/99-tailbridge-exit-node.conf").stdout
+        self.install("node")
+        require(routes_match(defaults | {subnet}), "Unset exit setting withdrew existing routes")
+
+        self.install("node", ADVERTISE_EXIT_NODE="false")
+        self.wait(lambda: routes_match({subnet}), "exit withdrawal reaches control")
+        self.exec("systemctl", "restart", "tailscaled")
+        self.node_ready()
+        self.install("node")
+        require(routes_match({subnet}), "Restart or unset setting restored exit advertisement")
+        require(self.identity() == baseline, "Exit toggle changed node identity")
+        require(self.exec("cat", "/etc/sysctl.d/99-tailbridge-exit-node.conf").stdout == forwarding,
+                "Exit withdrawal changed shared forwarding configuration")
+        for key in ("net.ipv4.ip_forward", "net.ipv6.conf.all.forwarding"):
+            require(self.exec("sysctl", "-n", key).stdout.strip() == "1", "Exit withdrawal disabled shared forwarding")
+
+        self.install("node", ADVERTISE_EXIT_NODE="true")
+        self.wait(lambda: routes_match(defaults | {subnet}), "exit re-enabled without registration")
+        self.install("node", ADVERTISE_EXIT_NODE="false")
+        self.wait(lambda: routes_match({subnet}), "exit withdrawn again")
+        self.exec("tailscale", "set", "--advertise-routes=")
+        passed("exit true/unset/false updates control routes, preserves subnets and identity, and survives restart")
 
     def verify(self):
         self.prepare()
@@ -155,6 +191,8 @@ class ControlNodeTest(SystemdTest):
         rejected = self.install("node", check=False, SERVER_URL="https://wrong.systemd.test")
         require(rejected.returncode == 2 and self.identity() == baseline, "Wrong control URL did not preserve identity")
         passed("node rejects a different control URL without re-registration")
+
+        self.exit_advertisement(baseline)
 
         self.exec("tailscale", "down")
         require(json.loads(self.exec("tailscale", "status", "--json").stdout)["BackendState"] == "Stopped",

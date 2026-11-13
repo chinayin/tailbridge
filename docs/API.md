@@ -30,6 +30,18 @@ api /user
 
 轮换时先签发并验证新 key，再用 `sudo headscale apikeys list` 查旧 key ID，执行 `sudo headscale apikeys expire --id <旧ID>`。也可通过 REST 的 `POST /apikey`（`expiration`）、`GET /apikey` 和 `POST /apikey/expire`（`id`）完成轮换。
 
+## 批准客户端注册
+
+客户端执行 `tailscale up --login-server=<控制面URL>` 后，注册页面会给出 Auth ID 和 `headscale auth register` 命令；该命令供控制面管理员执行。按本项目流程，在管理电脑完成[认证](#认证)后调用等价 REST API，无需 SSH：
+
+```bash
+api /auth/register -X POST \
+  --data '{"user":"alice","authId":"<注册页面上的Auth ID>"}' |
+  jq '.node | {id,givenName,ipAddresses,user:.user.name}'
+```
+
+`user` 填已有用户名，`authId` 填完整的 `hskey-authreq-...`。管理员确认设备及所属用户后批准；管理 API Key 只保留在管理电脑。成功后客户端自动接入，用 `tailscale status` 检查；请求失效时重新发起登录，取得新的 Auth ID。
+
 ## 用户与注册密钥
 
 先查询用户；已存在时直接使用其 ID，否则创建：

@@ -1,21 +1,20 @@
 # 安装与配置
 
-适用于 Ubuntu 26.04（`amd64` / `arm64`）。按机器承担的角色阅读：[control 控制面](#control-控制面)、[derp 中继](#derp-中继)、[node 设备](#node-设备)。同机部署多个角色时合并相应的端口要求。
+适用于 Ubuntu 26.04（`amd64` / `arm64`），需要 Bash 和 curl。按机器承担的角色阅读：[control 控制面](#control-控制面)、[derp 中继](#derp-中继)、[node 设备](#node-设备)。同机部署多个角色时合并相应的端口要求。
 
 首次只需确定控制入口和第一个中继，无需预先规划所有地域。可以先在一台机器安装 control + 独立 derper，后续再添加地域。控制面启动要求 Map 非空；节点接入前还需让其中的中继实际可达，见[架构](ARCHITECTURE.md#组件与角色)。
 
 ## 共用准备
 
-在目标机通过远程安装器执行，参数放在 `sh -s --` 后，环境变量通过 `sudo env` 一次传入，供下载和安装共享；外层 Bash 启用 `pipefail`，使下载或安装失败时整个命令返回非零，安装器仍由 `sh` 执行
+在目标机通过 Bash 执行远程安装器，参数放在 `bash -s --` 后，环境变量通过 `sudo env` 传给安装器。下列管道命令用于手动安装；自动化部署应先下载并校验，再执行，避免管道掩盖下载失败。
 
 例如查看帮助：
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-  sh -s -- --help'
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh | bash -s -- --help
 ```
 
-control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.com/chinayin/tailbridge/main`，省略或空值均使用默认值。仅镜像、自托管或固定分支 / tag 时覆盖，并让安装器下载地址与模板根地址指向同一份源码；该地址下须同时包含 `install.sh` 和 `files/`。`curl | sh` 不会将下载 URL 传给脚本，不能自动推导镜像地址。
+control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.com/chinayin/tailbridge/main`，省略或空值均使用默认值。仅镜像、自托管或固定分支 / tag 时覆盖，并让安装器下载地址与模板根地址指向同一份源码；该地址下须同时包含 `install.sh` 和 `files/`。`curl | bash` 不会将下载 URL 传给脚本，不能自动推导镜像地址。
 
 安装需要 root 权限，以写入系统目录、安装包和管理服务。示例中的 `sudo` 供有管理员权限的普通用户使用；已登录 root 时去掉 `sudo` 即可，`--dry-run` 不要求 root。Headscale 和 derper 分别使用服务账户 `headscale`、`derper`，与安装账户分开。
 
@@ -27,13 +26,13 @@ control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.c
 
 ### 下载代理
 
-在上述调用方式中增加 `PROXY`，`curl` 使用 `-x` 读取代理：
+代理地址同时传给下载命令和安装器，避免 sudo 丢失环境变量：
 
 ```bash
-sudo env PROXY=http://127.0.0.1:7890 \
-  SERVER_URL=https://tailbridge.example.net NODE_AUTHKEY='<首次注册密钥>' \
-  bash -o pipefail -c 'curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-    sh -s -- --role node'
+PROXY=http://127.0.0.1:7890
+curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sudo env PROXY="$PROXY" SERVER_URL=https://tailbridge.example.net \
+    NODE_AUTHKEY='<首次注册密钥>' bash -s -- --role node
 ```
 
 三个角色均支持 `PROXY=http(s)://[用户:密码@]主机[:端口]`，作用于 curl、apt 和 Go 下载，不写入系统或服务配置。`127.0.0.1` 指执行安装的目标机；容器或远程服务器须使用它能访问的代理地址。
@@ -106,13 +105,13 @@ sudo systemctl restart derper
 以下使用自动证书，先替换地址、域名和邮箱：
 
 ```bash
-sudo env SERVER_URL=https://tailbridge.example.net BASE_DOMAIN=tb.example.net \
-  ACME_EMAIL=ops@example.net TLS_HOSTNAME=tailbridge.example.net \
-  DERP_REGION_ID=910 DERP_REGION_CODE=ap-east-1 DERP_REGION_NAME='Hong Kong' \
-  DERP_NODE_NAME=tb-derp-hk-01 \
-  DERP_HOSTNAME=tb-derp-hk-01.example.net \
-  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-    sh -s -- --role control --dry-run'
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sudo env SERVER_URL=https://tailbridge.example.net BASE_DOMAIN=tb.example.net \
+    ACME_EMAIL=ops@example.net TLS_HOSTNAME=tailbridge.example.net \
+    DERP_REGION_ID=910 DERP_REGION_CODE=ap-east-1 DERP_REGION_NAME='Hong Kong' \
+    DERP_NODE_NAME=tb-derp-hk-01 \
+    DERP_HOSTNAME=tb-derp-hk-01.example.net \
+    bash -s -- --role control --dry-run
 ```
 
 确认计划后去掉 `--dry-run` 执行。同机部署中继时增加 `DERP_PORT=8443`。文件证书模式将 `ACME_EMAIL` / `TLS_HOSTNAME` 替换为 `TLS_CERT_PATH=/etc/ssl/control/fullchain.pem` 和 `TLS_KEY_PATH=/etc/ssl/control/privkey.pem`。
@@ -145,10 +144,10 @@ curl -fsS https://tailbridge.example.net/health
 ### 安装与检查
 
 ```bash
-sudo env SERVER_URL=https://tailbridge.example.net \
-  DERP_HOSTNAME=tb-derp-hk-01.example.net \
-  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-    sh -s -- --role derp --dry-run'
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sudo env SERVER_URL=https://tailbridge.example.net \
+    DERP_HOSTNAME=tb-derp-hk-01.example.net \
+    bash -s -- --role derp --dry-run
 ```
 
 确认计划后去掉 `--dry-run` 执行。同机部署时增加 `DERP_PORT=8443`，control 的 Map 也须填写相同端口；修改 Map 不会更改中继监听。
@@ -189,7 +188,7 @@ sudo journalctl -u derper -n 50 --no-pager
 | `SERVER_URL` | 必填 | 无 | 与 control 配置的完整 URL 一致，作为 Tailscale `--login-server` |
 | `NODE_AUTHKEY` | 首次注册必填 | 无 | 控制面签发的注册密钥；已有有效身份时忽略，不是管理 API Key，也不代表互访授权 |
 | `NODE_HOSTNAME` | 可选 | 本机 hostname | 首次注册时指定设备名；重跑不改名 |
-| `ADVERTISE_EXIT_NODE` | 可选 | `false` | `true` 持久化并开启 IPv4 / IPv6 转发，注册后宣告出口；省略、空值或 `false` 均保留已有设置，不关闭出口 |
+| `ADVERTISE_EXIT_NODE` | 可选 | 未设置 | `true` 开启并持久化 IP 转发、宣告出口；`false` 撤销出口宣告；省略或空值保留现状。撤销宣告保留节点身份、其他子网路由和系统转发设置 |
 
 节点无需填写 `BASE_DOMAIN`、证书变量或 region，DNS 和中继列表由控制面下发。
 
@@ -210,10 +209,10 @@ sudo journalctl -u derper -n 50 --no-pager
 先按 [REST API 的用户与注册密钥流程](API.md#用户与注册密钥)签发单次使用的 key，再通过已有安全通道传给待安装节点。安装器不会自动向未注册设备下发密钥。
 
 ```bash
-sudo env SERVER_URL=https://tailbridge.example.net \
-  NODE_AUTHKEY='<首次注册密钥>' \
-  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-    sh -s -- --role node'
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sudo env SERVER_URL=https://tailbridge.example.net \
+    NODE_AUTHKEY='<首次注册密钥>' \
+    bash -s -- --role node
 ```
 
 安装成功后检查连接：
@@ -223,11 +222,34 @@ sudo tailscale status
 sudo tailscale netcheck
 ```
 
-有 systemd 时安装器启动并注册；无 systemd 时由调用方启动、注册及宣告出口，安装器不消费 authkey，但仍按开关配置转发。已有有效身份重跑不需要密钥；损坏或失效状态保留并报错，须显式处理重新认证。手机和 Mac 使用官方客户端接入。[注册方式](https://headscale.net/stable/ref/registration/)
+有 systemd 时安装器启动、注册并应用出口开关；无 systemd 时由调用方启动、注册，再按安装器提示执行 `tailscale set --advertise-exit-node=true` 或 `false`，安装器不消费 authkey。已有有效身份重跑不需要密钥；损坏或失效状态保留并报错，须显式处理重新认证。Mac 和已安装 Tailscale 的 Linux 设备见[客户端指南](CLIENTS.md)；手机使用官方客户端接入。[注册方式](https://headscale.net/stable/ref/registration/)
 
 复用身份前会核对已保存的 `ControlURL`；与 `SERVER_URL` 不同、为空或无法读取时拒绝继续，`--force` 不切换身份。
 
 需要出口时在上述命令中增加 `ADVERTISE_EXIT_NODE=true`，随后完成[控制面批准与授权](OPERATIONS.md#配置-linux-出口)。
+
+## 连通性测试
+
+安装后使用本机已有的 Tailscale 检查，不需要安装参数或注册密钥：
+
+```bash
+bash ./install.sh test
+bash ./install.sh test --exit-node tb-node-jp-01
+```
+
+也可远程执行，无需保存脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  bash -s -- test --exit-node tb-node-jp-01
+```
+
+支持 Linux / macOS，需要已有的 `tailscale`、`curl` 和 Python 3；缺少工具显示 `[SKIP]` 并返回 0，不自动安装。未登录或 daemon 不可用会报错。运行账户须有相应的 Tailscale 操作权限，Linux 切换出口可能需要 `sudo`。
+
+- `test`：只读检查节点状态、`tailscale netcheck`、IPv4 公网地址，以及百度和 Google 的 HTTPS 访问。
+- `test --exit-node <名称或IP>`：从另一台已注册设备测试已批准的出口，对比不选出口、使用目标出口、恢复原设置后的结果；已有出口时也记录原连接结果。使用目标出口期间开启 LAN 访问；完成、失败或捕获中断后恢复原出口选择和 LAN 访问设置，恢复失败会报错；不修改出口服务器的宣告或控制面策略。需要系统 TUN 接口，不支持仅提供代理的 userspace 模式。
+
+输出各项 HTTP 状态、curl 错误码、出口 IP 和耗时；单个网站失败不阻止其他检查，基线访问失败不阻止出口测试。本机检查或目标出口的全部公网 IP 查询失败、原本可用的连接未恢复时返回 1。此测试只验证 IPv4；出口机自身的 `test` 不能替代另一台客户端的出口验证。保持 Mac 网络不受影响时，在 [Docker 节点](E2E_TEST_GUIDE.md)内执行。
 
 ## 可选管理界面
 

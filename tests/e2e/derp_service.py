@@ -107,7 +107,7 @@ class ServiceTest(SystemdTest):
                          "HTTP_PROXY=", "HTTPS_PROXY=", "ALL_PROXY=", "http_proxy=", "https_proxy=",
                          "all_proxy=", "NO_PROXY=localhost,127.0.0.1,::1",
                          "no_proxy=localhost,127.0.0.1,::1", "timeout", "45",
-                         "sh", "/source/install.sh", "--role", "derp", "--tailscale-version", self.version,
+                         "bash", "/source/install.sh", "--role", "derp", "--tailscale-version", self.version,
                          *(["--force"] if force else []), check=check, timeout=50)
 
     def pid(self):

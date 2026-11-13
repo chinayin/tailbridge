@@ -26,18 +26,20 @@ Headscale manages devices and access policies. Devices exchange WireGuard-encryp
 
 ## Getting started
 
-The installer supports Ubuntu 26.04 on `amd64` and `arm64`. Follow the [installation guide](docs/INSTALL.md) to deploy `control` and at least one `derp`; they can share a server.
+The Bash installer supports Ubuntu 26.04 on `amd64` and `arm64`. Follow the [installation guide](docs/INSTALL.md) to deploy `control` and at least one `derp`; they can share a server.
 
 Obtain a node authentication key, then run on each Linux device:
 
 ```bash
-sudo env SERVER_URL=https://tailbridge.example.net \
-  NODE_AUTHKEY='<node-auth-key>' \
-  bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
-    sh -s -- --role node'
+curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
+  sudo env SERVER_URL=https://tailbridge.example.net \
+    NODE_AUTHKEY='<node-auth-key>' \
+    bash -s -- --role node
 ```
 
 Replace the URL and key with your own. New devices require access grants before they can communicate; see [operations](docs/OPERATIONS.md) for policies and exit routing.
+
+For Mac/Linux registration, daily use, exit selection, and connectivity tests, see the [client guide](docs/CLIENTS.md).
 
 ## Environment variables
 
@@ -59,7 +61,7 @@ Pass variables through `sudo env`; see [invocation details](docs/INSTALL.md#共�
 | `DERP_IPV4` | control | — | Optional relay IPv4 address; leave blank to use DNS |
 | `NODE_AUTHKEY` | node | — | Registration key for a new device |
 | `NODE_HOSTNAME` | node | System hostname | Device name at first registration |
-| `ADVERTISE_EXIT_NODE` | node | `false` | Enable forwarding and advertise an exit; approval and access grants are separate |
+| `ADVERTISE_EXIT_NODE` | node | Unset | Enable or withdraw exit advertisement; [setting behavior](docs/INSTALL.md#node-设备) |
 
 Control supports automatic or file certificates; DERP requires file certificates. Use matching relay hostnames and ports for both roles. Full requirements, examples, and firewall ports are in the [installation guide](docs/INSTALL.md).
 
@@ -68,10 +70,12 @@ Control supports automatic or file certificates; DERP requires file certificates
 Detailed guides are currently in Chinese.
 
 - [Installation and configuration](docs/INSTALL.md)
+- [Mac / Linux clients](docs/CLIENTS.md)
 - [REST management API](docs/API.md)
 - [Architecture](docs/ARCHITECTURE.md) · [Design decisions](docs/DESIGN_PROPOSAL.md)
 - [Node naming](docs/NODE_NAMING.md)
 - [Operations](docs/OPERATIONS.md)
+- [Exit node audit and remediation](docs/EXIT_NODE_AUDIT.md)
 - [Local setup and E2E testing](docs/E2E_TEST_GUIDE.md)
 
 ## License

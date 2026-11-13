@@ -10,7 +10,7 @@ args=(--role "${role}" "$@")
 install_component() {
     # Use the download proxy only in the installer subprocess
     env PROXY="${TB_INSTALL_PROXY:-}" NO_PROXY=localhost,127.0.0.1,::1,installer-files \
-        no_proxy=localhost,127.0.0.1,::1,installer-files sh /app/install.sh "${args[@]}"
+        no_proxy=localhost,127.0.0.1,::1,installer-files bash /app/install.sh "${args[@]}"
 }
 
 case "${role}" in

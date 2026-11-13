@@ -207,7 +207,7 @@ def selected_exit(service, destination, *, check=True):
             f"Exit already selected on {service}; disable it before running E2E")
     try:
         result = node(service, "tailscale", "set", f"--exit-node={destination}",
-                      "--exit-node-allow-lan-access=false", check=check)
+                      "--exit-node-allow-lan-access=true", check=check)
         yield result
     finally:
         # 选择命令超时也可能已生效，必须无条件撤销并恢复原 LAN 偏好。
@@ -284,6 +284,12 @@ def exit_routing(states, *, faults):
             require(any(route.get("dst") == "default" and route.get("dev") == "tailscale0" for route in routes),
                     f"IPv{family} whole-device default route is missing")
         passed("selected exit carries IPv4 and IPv6 HTTP with the exit egress source", path=path, evidence=evidence)
+        lan_probe = container_network("probe", "service")["IPAddress"]
+        lan_source = eventually(lambda: node(allowed, "curl", "--noproxy", "*", "-fsS", "--max-time", "5",
+                                             f"http://{lan_probe}:8080").stdout.strip())
+        require(lan_source == container_network(allowed, "service")["IPAddress"],
+                "LAN probe did not receive the client's local network address")
+        passed("local LAN remains directly reachable while the exit is selected", source=lan_source)
         eventually(lambda: assert_ssh(allowed, CONFIG.fqdn("target"), states[allowed]["ips"][0]))
         passed("MagicDNS and tailnet SSH remain usable while the exit is selected")
         if faults:

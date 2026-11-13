@@ -27,6 +27,7 @@ EXAMPLES = {
     ('docs/INSTALL.md', 3): (['--role', 'derp', '--dry-run'], {
         **SERVER, 'DERP_HOSTNAME': 'tb-derp-hk-01.example.net'}),
     ('docs/INSTALL.md', 4): (['--role', 'node'], NODE),
+    ('docs/INSTALL.md', 5): (['test', '--exit-node', 'tb-node-jp-01'], {}),
     ('docs/OPERATIONS.md', 0): (['--role', 'node'], {**SERVER, 'ADVERTISE_EXIT_NODE': 'true'}),
 }
 
@@ -47,12 +48,14 @@ Path(os.environ['TB_TEST_DIR'], 'installer.json').write_text(json.dumps({
 raise SystemExit(int(os.environ.get('TB_TEST_INSTALL_STATUS', '0')))
 ''')
         (self.base / 'download.sh').write_text(
+            '[[ -n "${BASH_VERSION:-}" ]] && ! shopt -qo posix || exit 42\n'
             f'exec {shlex.quote(sys.executable)} {shlex.quote(str(observer))} "$@"\n')
         self.stub('curl', '''
 base = Path(os.environ['TB_TEST_DIR'])
 (base / 'curl.json').write_text(json.dumps({'args': sys.argv[1:], 'env': dict(os.environ)}))
 status = int(os.environ.get('TB_TEST_CURL_STATUS', '0'))
 if status:
+    print(f'curl: download failed ({status})', file=sys.stderr)
     raise SystemExit(status)
 sys.stdout.write((base / 'download.sh').read_text())
 ''')
@@ -79,12 +82,12 @@ sys.stdout.write((base / 'download.sh').read_text())
                               env={**self.env, **changes}, text=True,
                               capture_output=True, timeout=10)
 
-    def test_download_failure_is_not_reported_as_success(self):
+    def test_download_failure_is_visible_and_does_not_run_installer(self):
         for name, command in self.examples():
             for status in ('6', '22'):
                 with self.subTest(example=name, curl_status=status):
                     result = self.run_example(command, TB_TEST_CURL_STATUS=status)
-                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f'curl: download failed ({status})', result.stderr)
                     self.assertFalse((self.base / 'installer.json').exists())
 
     def test_installer_failure_is_not_reported_as_success(self):
@@ -93,7 +96,7 @@ sys.stdout.write((base / 'download.sh').read_text())
                 result = self.run_example(command, TB_TEST_INSTALL_STATUS='37')
                 self.assertEqual(result.returncode, 37, result.stderr)
 
-    def test_success_preserves_arguments_and_shared_environment(self):
+    def test_success_uses_bash_and_preserves_arguments_and_environment(self):
         for name, command in self.examples():
             with self.subTest(example=name):
                 result = self.run_example(command)
@@ -104,7 +107,6 @@ sys.stdout.write((base / 'download.sh').read_text())
                 self.assertEqual(installer['args'], args)
                 self.assertEqual(curl['args'][-1], INSTALL_URL)
                 for key, value in expected_env.items():
-                    self.assertEqual(curl['env'].get(key), value, key)
                     self.assertEqual(installer['env'].get(key), value, key)
                 if 'PROXY' in expected_env:
                     self.assertEqual(curl['args'][curl['args'].index('-x') + 1], expected_env['PROXY'])

@@ -49,7 +49,7 @@ class InstallTests(unittest.TestCase):
 
     def run_install(self, *args, role='control', changes=None, expected=0):
         env = {**self.env, **(changes or {})}
-        result = subprocess.run(['sh', str(ROOT / 'install.sh'), '--role', role, *args],
+        result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--role', role, *args],
                                 env=env, text=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, expected, result.stderr)
         self.assertEqual(result.stdout, '')
@@ -305,7 +305,7 @@ if sys.argv[1]=='is-active': raise SystemExit(3)
                 self.assertEqual(values, {name: inherited.get(name) for name in values})
 
     def test_proxy_reaches_apt_before_curl_is_installed(self):
-        for name in ('sh', 'grep', 'mktemp', 'rm'):
+        for name in ('bash', 'grep', 'mktemp', 'rm'):
             (self.bin / name).symlink_to(shutil.which(name))
         self.stub('id', 'print("0")')
         self.stub('apt-get', '''
@@ -326,7 +326,7 @@ with open(os.environ['TEST_APT_ENV'], 'a') as f:
 
     def test_installer_version_requires_no_role_platform_or_configuration(self):
         self.stub('uname', 'raise SystemExit("version must not inspect the platform")')
-        result = subprocess.run(['sh', str(ROOT / 'install.sh'), '--version'],
+        result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--version'],
                                 env={**self.env, 'INSTALL_BASE_URL': '', 'SERVER_URL': ''},
                                 text=True, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -369,7 +369,7 @@ with open(os.environ['TEST_APT_ENV'], 'a') as f:
         changes = self.derp_fixture()
         binary = self.prefix / 'usr/local/bin/derper'
         binary.parent.mkdir(parents=True)
-        binary.write_text('#!/bin/sh\nprintf "%s\\n" 1.104.5-ERR-BuildInfo\n')
+        binary.write_text('#!/usr/bin/env bash\nprintf "%s\\n" 1.104.5-ERR-BuildInfo\n')
         binary.chmod(0o755)
         (self.prefix / 'run/systemd/system').mkdir(parents=True)
         self.stub('id', 'print("123" if len(sys.argv)>2 else "0")')
@@ -413,9 +413,9 @@ shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], args
                       '-verify-client-url-fail-open=false', '/var/lib/derper/derper.key'):
             self.assertIn(value, args)
         config = self.prefix / 'etc/derper/derper.conf'
-        persisted = subprocess.run(['sh', '-c', '. "$1"; printf "%s\\n" "$SERVER_URL" '
+        persisted = subprocess.run(['bash', '-c', '. "$1"; printf "%s\\n" "$SERVER_URL" '
                                    '"$DERP_HOSTNAME" "$DERP_PORT" "$DERP_CERT_DIR"',
-                                   'sh', str(config)], env={'PATH': os.environ['PATH']},
+                                   'bash', str(config)], env={'PATH': os.environ['PATH']},
                                   text=True, capture_output=True, check=True)
         self.assertEqual(persisted.stdout.splitlines(), ['https://control.example.test',
                          'derp.example.test', '8443', changes['DERP_CERT_DIR']])
@@ -558,7 +558,7 @@ os.execv({openssl!r}, [{openssl!r}, *sys.argv[1:]])
 
     def test_derp_accepts_plain_version_without_rebuilding(self):
         changes = self.derp_runtime()
-        (self.prefix / 'usr/local/bin/derper').write_text('#!/bin/sh\necho 1.104.5\n')
+        (self.prefix / 'usr/local/bin/derper').write_text('#!/usr/bin/env bash\necho 1.104.5\n')
         self.run_install(role='derp', changes=changes)
 
     def test_templates_only_expand_parameters_for_the_selected_role(self):
@@ -718,8 +718,10 @@ elif sys.argv[1:]==['debug','prefs']:
     print(json.dumps({'ControlURL':os.environ.get('TEST_CONTROL_URL','https://control.example.test/')}))
 else:
     if sys.argv[1]=='set':
-        assert sys.argv[2:]==['--advertise-exit-node']
-        assert json.loads(Path(os.environ['TEST_KERNEL']).read_text())=={'net.ipv4.ip_forward':1,'net.ipv6.conf.all.forwarding':1}
+        assert sys.argv[2:] in (['--advertise-exit-node'], ['--advertise-exit-node=true'], ['--advertise-exit-node=false'])
+        if sys.argv[2]!='--advertise-exit-node=false':
+            assert json.loads(Path(os.environ['TEST_KERNEL']).read_text())=={'net.ipv4.ip_forward':1,'net.ipv6.conf.all.forwarding':1}
+        if os.environ.get('TEST_EXIT_SET_FAIL'): raise SystemExit(1)
     with open(os.environ['TEST_CALLS'],'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
 ''')
         self.stub('iptables', 'raise SystemExit("installer must not rewrite firewall rules")')
@@ -735,7 +737,7 @@ else:
         self.assertEqual(config.stat().st_mode & 0o777, 0o644)
         self.assertEqual(json.loads((self.base/'kernel.json').read_text()),
                          {'net.ipv4.ip_forward':1,'net.ipv6.conf.all.forwarding':1})
-        self.assertEqual(json.loads((self.base/'calls').read_text()), ['set','--advertise-exit-node'])
+        self.assertEqual(json.loads((self.base/'calls').read_text()), ['set','--advertise-exit-node=true'])
         self.assertEqual((self.prefix/'var/lib/tailscale/tailscaled.state').read_text(), 'preserved identity')
         self.run_install(role='node', changes=changes)
         self.assertEqual(config.read_text().count('net.ipv4.ip_forward'), 1)
@@ -761,7 +763,7 @@ else:
         self.assertFalse((self.base / 'calls').exists())
         self.run_install(role='node', changes=changes)
         calls = [json.loads(line) for line in (self.base / 'calls').read_text().splitlines()]
-        self.assertEqual(calls, [['up'], ['set', '--advertise-exit-node']])
+        self.assertEqual(calls, [['up'], ['set', '--advertise-exit-node=true']])
 
     def test_control_rejects_directory_before_publishing_any_file(self):
         self.config('derp.yaml').mkdir(parents=True)
@@ -778,23 +780,56 @@ else:
         self.assertEqual([call[0] for call in calls], ['up','set'])
         self.assertTrue(any(arg.startswith('--auth-key=file:') for arg in calls[0]))
 
-    def test_exit_unset_or_false_preserves_existing_configuration(self):
+    def test_exit_unset_or_empty_preserves_existing_configuration(self):
         changes = self.exit_runtime()
+        changes.pop('ADVERTISE_EXIT_NODE')
+        self.env.pop('ADVERTISE_EXIT_NODE')
         config = self.prefix/'etc/sysctl.d/99-tailbridge-exit-node.conf'
         config.parent.mkdir(parents=True)
         config.write_text('existing sysctl configuration\n')
-        for value in ('', 'false'):
+        for value in (None, ''):
             with self.subTest(value=value):
-                self.run_install(role='node', changes={**changes,'ADVERTISE_EXIT_NODE':value})
+                environment = changes if value is None else {**changes, 'ADVERTISE_EXIT_NODE':value}
+                self.run_install(role='node', changes=environment)
                 self.assertEqual(config.read_text(), 'existing sysctl configuration\n')
                 self.assertFalse((self.base/'kernel.json').exists())
                 self.assertFalse((self.base/'calls').exists())
+
+    def test_exit_false_withdraws_exit_and_preserves_forwarding_and_identity(self):
+        changes = self.exit_runtime()
+        self.run_install(role='node', changes=changes)
+        config = self.prefix/'etc/sysctl.d/99-tailbridge-exit-node.conf'
+        before = config.read_bytes(), (self.base/'kernel.json').read_bytes()
+        (self.base/'calls').unlink()
+        for _ in range(2):
+            self.run_install(role='node', changes={**changes, 'ADVERTISE_EXIT_NODE':'false'})
+        self.assertTrue((self.base/'calls').exists(), 'false must explicitly withdraw exit advertisement')
+        calls = [json.loads(line) for line in (self.base/'calls').read_text().splitlines()]
+        self.assertEqual(calls, [['set','--advertise-exit-node=false']] * 2)
+        self.assertEqual(before, (config.read_bytes(), (self.base/'kernel.json').read_bytes()))
+        self.assertEqual((self.prefix/'var/lib/tailscale/tailscaled.state').read_text(), 'preserved identity')
+
+    def test_exit_false_does_not_enable_forwarding(self):
+        changes = self.exit_runtime()
+        self.run_install(role='node', changes={**changes, 'ADVERTISE_EXIT_NODE':'false'})
+        self.assertTrue((self.base/'calls').exists(), 'false must explicitly withdraw exit advertisement')
+        self.assertEqual(json.loads((self.base/'calls').read_text()), ['set','--advertise-exit-node=false'])
+        self.assertFalse((self.prefix/'etc/sysctl.d/99-tailbridge-exit-node.conf').exists())
+        self.assertFalse((self.base/'kernel.json').exists())
+
+    def test_exit_false_failure_is_reported(self):
+        changes = self.exit_runtime()
+        self.run_install(role='node', changes={**changes, 'ADVERTISE_EXIT_NODE':'false',
+                                              'TEST_EXIT_SET_FAIL':'1'}, expected=1)
+        self.assertEqual((self.prefix/'var/lib/tailscale/tailscaled.state').read_text(), 'preserved identity')
 
     def test_exit_dry_run_and_invalid_inputs_have_no_side_effects(self):
         result = self.run_install('--dry-run', role='node', changes={'ADVERTISE_EXIT_NODE':'true'})
         self.assertIn('forwarding', result.stderr)
         self.assertIn('advertise', result.stderr)
         self.assertFalse(self.prefix.exists())
+        result = self.run_install('--dry-run', role='node', changes={'ADVERTISE_EXIT_NODE':'false'})
+        self.assertIn('Withdraw exit advertisement', result.stderr)
         self.run_install(role='node', changes={'ADVERTISE_EXIT_NODE':'yes'}, expected=1)
         self.run_install(role='control', changes={'ADVERTISE_EXIT_NODE':'true'}, expected=1)
         self.assertFalse(self.prefix.exists())
@@ -833,6 +868,13 @@ else:
         self.run_install(role='node', changes=changes)
         self.assertTrue((self.prefix/'etc/sysctl.d/99-tailbridge-exit-node.conf').exists())
         self.assertTrue((self.base/'kernel.json').exists())
+        self.assertFalse((self.base/'calls').exists())
+
+    def test_exit_false_without_systemd_defers_withdrawal(self):
+        changes = self.exit_runtime(backend='NeedsLogin', systemd=False)
+        result = self.run_install(role='node', changes={**changes, 'ADVERTISE_EXIT_NODE':'false'})
+        self.assertIn('tailscale set --advertise-exit-node=false', result.stderr)
+        self.assertFalse((self.prefix/'etc/sysctl.d/99-tailbridge-exit-node.conf').exists())
         self.assertFalse((self.base/'calls').exists())
 
     def control_runtime(self, multiline=True):
@@ -965,7 +1007,7 @@ elif sys.argv[1:3] == ['policy', 'check'] and '--bypass-grpc-and-access-database
     def test_derper_uses_official_go_download_metadata(self):
         changes = self.derp_runtime()
         binary = self.prefix / 'usr/local/bin/derper'
-        old_program = '#!/bin/sh\necho 0.0.0\n'
+        old_program = '#!/usr/bin/env bash\necho 0.0.0\n'
         binary.write_text(old_program)
         previous = binary.open('rb')
         self.addCleanup(previous.close)
