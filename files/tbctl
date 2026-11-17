@@ -106,6 +106,8 @@ def publish(kind, content):
 
 def backup(now=None):
     now = now or datetime.now(timezone.utc)
+    # Manual runs inherit the caller's umask; snapshots stay private either way
+    os.umask(0o077)
     for entry in BACKUPS.glob('.*'):
         shutil.rmtree(entry, ignore_errors=True)
     stamp = now.strftime(STAMP)
