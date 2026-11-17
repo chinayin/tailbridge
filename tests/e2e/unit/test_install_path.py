@@ -14,6 +14,9 @@ import e2e
 from settings import Settings, ROOT
 from config import read_yaml
 
+sys.path.insert(0, str(ROOT.parents[1] / 'tests/install'))
+from test_tbctl import load_tool  # noqa: E402
+
 
 class InstallPathTests(unittest.TestCase):
     def test_e2e_settings_load_without_legacy_deployment_tree(self):
@@ -74,19 +77,21 @@ class InstallPathTests(unittest.TestCase):
             response = subprocess.CompletedProcess([], 0, json.dumps(state), '')
             published = []
 
+            tool = load_tool()
+            tool.CONFIG = policy.parent
+
             def compose(*args, **kwargs):
-                if args == ('exec', '-T', 'control', 'python3', '/app/publish_policy.py'):
-                    import publish_policy
-                    publish_policy.write_policy(policy, kwargs['input'])
+                if args == ('exec', '-T', 'control', 'tbctl', 'publish', 'policy'):
+                    with patch.object(tool, 'check_policy'), patch.object(tool, 'reload_policy'):
+                        tool.publish('policy', kwargs['input'])
                     published.append(True)
-                elif args[:5] == ('exec', '-T', 'control', 'headscale', 'policy'):
-                    self.assertTrue(published, 'publish in the control filesystem before native validation')
                 return response
 
             with patch.object(e2e, 'CONFIG', config), patch.object(e2e, 'GENERATED', config.generated), \
                     patch.object(e2e, 'compose', side_effect=compose), patch.object(e2e, 'headscale'), \
                     policy.open() as active_reader:
                 e2e.configure_exit_node()
+                self.assertEqual(published, [True], 'publish through the production tool')
                 self.assertEqual(active_reader.read(), previous, 'existing readers must see a complete policy')
             self.assertEqual(policy.stat().st_mode & 0o777, 0o644)
             self.assertEqual(len(json.loads(policy.read_text())['grants']), 2)

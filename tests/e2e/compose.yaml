@@ -1,9 +1,7 @@
-# Ubuntu 镜像只备系统工具；组件在启动时由根目录 install.sh 安装。
+# 运行镜像只备系统工具，由 e2e.py 无上下文构建；组件在启动时由根目录 install.sh 安装。
 x-runtime: &runtime
-  image: ${COMPOSE_PROJECT_NAME}-runtime
-  build:
-    context: ${TB_INSTALL_SOURCE:?Use tests/e2e/e2e.py}
-    dockerfile: tests/e2e/node.Dockerfile
+  image: ${TB_RUNTIME_IMAGE:?Use tests/e2e/e2e.py}
+  pull_policy: never
   init: true
   working_dir: /app
   entrypoint: [bash, /app/start.sh]
@@ -68,7 +66,6 @@ services:
     volumes:
       - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro
       - ${TB_E2E_SOURCE}/start.sh:/app/start.sh:ro
-      - ${TB_E2E_SOURCE}/publish_policy.py:/app/publish_policy.py:ro
       - ${TB_E2E_BUNDLE}/config:/etc/headscale
       - ${TB_E2E_BUNDLE}/tls/fullchain.pem:/run/secrets/control.crt:ro
       - ${TB_E2E_BUNDLE}/secrets/control_tls_key:/run/secrets/control.key:ro
@@ -185,7 +182,8 @@ services:
 
   # 模拟一个经下一跳可达的 HTTP 主机；目标 IP 在 lo，不是出口的直连 LAN。
   httpbin-network:
-    image: ${COMPOSE_PROJECT_NAME}-runtime
+    image: ${TB_RUNTIME_IMAGE}
+    pull_policy: never
     init: true
     working_dir: /app
     cap_add: [NET_ADMIN]

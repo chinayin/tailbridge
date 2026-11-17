@@ -26,7 +26,19 @@ class InstallTests(unittest.TestCase):
         self.bin = self.base / 'bin'
         self.bin.mkdir()
         self.stub('uname', 'print("Linux")')
-        self.stub('dpkg', 'print("arm64")')
+        self.stub('dpkg', '''
+if sys.argv[1] == '--compare-versions':
+    left, op, right = sys.argv[2:5]
+    assert op == 'ge'
+    version = lambda value: tuple(int(part) for part in value.split('.'))
+    raise SystemExit(0 if version(left) >= version(right) else 1)
+print("arm64")
+''')
+        self.stub('dpkg-query', '''
+package = os.environ.get('TEST_TAILSCALE_PACKAGE', 'installed 1.104.5')
+if not package: raise SystemExit(1)
+print(package, end='')
+''')
         self.stub('apt-get', 'raise SystemExit("unexpected apt-get")')
         self.stub('timeout', 'import subprocess; raise SystemExit(subprocess.call(sys.argv[2:]))')
         self.env = {**os.environ, 'PATH': f'{self.bin}:{os.environ["PATH"]}',
@@ -73,17 +85,37 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.config().read_text(), 'server_url: "https://control.example.test"\ndns:\n  base_domain: "tail.example.test"\nacme_email: ""\n')
         self.assertEqual(self.config('derp.yaml').read_text(), 'hostname: "derp.example.test"\nipv4: ""\nderpport: 8443\n')
 
-    def test_overwrite_requires_force_and_same_content_is_idempotent(self):
+    def test_config_overwrite_requires_force_and_same_content_is_idempotent(self):
         self.run_install()
         self.run_install()
-        self.config('policy.hujson').write_text('{"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}')
+        self.config().write_text(self.config().read_text() + '# operator edit\n')
         before = {p.name: p.read_bytes() for p in self.config().parent.iterdir()}
         result = self.run_install(expected=1)
         self.assertIn('--force', result.stderr)
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.config().parent.iterdir()})
-        result = self.run_install('--force')
-        self.assertIn('policy.hujson', result.stderr)
-        self.assertEqual(json.loads(self.config('policy.hujson').read_text()), {'grants': []})
+        self.run_install('--force')
+        self.assertNotIn('# operator edit', self.config().read_text())
+
+    def test_rerun_and_force_keep_maintained_policy_and_derp_map(self):
+        self.run_install()
+        self.config('policy.hujson').write_text('{"grants":[{"src":["*"],"dst":["*"],"ip":["*"]}]}')
+        self.config('derp.yaml').write_text(self.config('derp.yaml').read_text() + '# second region\n')
+        before = {name: self.config(name).read_bytes() for name in ('policy.hujson', 'derp.yaml')}
+        for args in ((), ('--force',), ('--force', '--headscale-version', '0.29.8')):
+            with self.subTest(args=args):
+                result = self.run_install(*args)
+                self.assertIn('keeping existing', result.stderr)
+                self.assertEqual(before, {name: self.config(name).read_bytes() for name in before})
+
+    def test_control_installs_operations_tool_and_backup_timer(self):
+        self.run_install()
+        tool = self.prefix / 'usr/local/sbin/tbctl'
+        self.assertEqual(tool.read_bytes(), (ROOT / 'files/tbctl').read_bytes())
+        self.assertEqual(tool.stat().st_mode & 0o777, 0o755)
+        for name in ('tbctl-backup.service', 'tbctl-backup.timer'):
+            unit = self.prefix / 'etc/systemd/system' / name
+            self.assertEqual(unit.read_bytes(), (ROOT / 'files' / name).read_bytes())
+            self.assertEqual(unit.stat().st_mode & 0o777, 0o644)
 
     def test_derp_region_and_node_render_from_environment(self):
         for identifier, code, label, name in (
@@ -91,6 +123,7 @@ class InstallTests(unittest.TestCase):
                 ('901', 'work', 'Work', 'tb-derp-work'),
                 ('910', 'ap-east-1', '香港 Hong Kong', 'tb-derp-hk-01')):
             with self.subTest(region=code):
+                self.config('derp.yaml').unlink(missing_ok=True)
                 self.run_install('--force', changes={'DERP_REGION_ID': identifier,
                     'DERP_REGION_CODE': code, 'DERP_REGION_NAME': label, 'DERP_NODE_NAME': name})
                 rendered = self.config('derp.yaml').read_text()
@@ -105,6 +138,7 @@ class InstallTests(unittest.TestCase):
         self.env.pop('DERP_PORT')
         for value, expected in ((None, 443), ('', 443), ('8443', 8443)):
             with self.subTest(value=value):
+                self.config('derp.yaml').unlink(missing_ok=True)
                 self.run_install('--force', changes={} if value is None else {'DERP_PORT': value})
                 self.assertIn(f'derpport: {expected}\n', self.config('derp.yaml').read_text())
         for value in ('0', '65536', 'https'):
@@ -115,8 +149,8 @@ class InstallTests(unittest.TestCase):
     def test_default_derp_port_does_not_overwrite_existing_map(self):
         self.run_install()
         before = self.config('derp.yaml').read_bytes()
-        result = self.run_install(changes={'DERP_PORT': ''}, expected=1)
-        self.assertIn('--force', result.stderr)
+        result = self.run_install(changes={'DERP_PORT': ''})
+        self.assertIn('keeping existing', result.stderr)
         self.assertEqual(self.config('derp.yaml').read_bytes(), before)
 
     def test_derp_region_inputs_are_required_before_writing(self):
@@ -144,9 +178,8 @@ class InstallTests(unittest.TestCase):
             '        hostname: home.example.test\n        derpport: 443\n'
             '        stunport: 3478\n        canport80: false\n')
         before = {p.name: p.read_bytes() for p in self.config().parent.iterdir()}
-        result = self.run_install(expected=1)
-        self.assertIn('--force', result.stderr)
-        self.assertIn('existing relay regions', result.stderr)
+        result = self.run_install(changes={'DERP_REGION_NAME': 'Renamed'})
+        self.assertIn('keeping existing', result.stderr)
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.config().parent.iterdir()})
 
     def test_force_preserves_all_identity_files(self):
@@ -192,7 +225,7 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn('versions.env', result.stderr)
         result = self.run_install('--dry-run', '--tailscale-version', '1.104.6', role='node',
                                   changes={'NODE_HOSTNAME': 'test-node', 'NODE_AUTHKEY': 'secret-value'})
-        self.assertIn('tailscale_1.104.6_arm64.tgz', result.stderr)
+        self.assertIn('pkgs.tailscale.com/stable/<ubuntu|debian> tailscale=1.104.6', result.stderr)
         self.assertNotIn('secret-value', result.stderr)
 
     def test_go_toolchain_is_managed_by_installer(self):
@@ -595,13 +628,8 @@ os.execv({openssl!r}, [{openssl!r}, *sys.argv[1:]])
         self.assertFalse(self.config().exists())
 
     def test_first_registration_uses_private_key_file_after_service_start(self):
-        for name in ('lib/systemd/system/tailscaled.service', 'etc/default/tailscaled'):
-            target = self.prefix / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.touch()
         (self.prefix / 'run/systemd/system').mkdir(parents=True)
         self.stub('id', 'print("0")')
-        self.stub('tailscaled', 'print("1.104.5")')
         calls = self.base / 'registration.json'
         self.stub('systemctl', 'Path(os.environ["TEST_STARTED"]).touch()')
         self.stub('tailscale', '''
@@ -627,23 +655,87 @@ elif sys.argv[1] == 'up':
                 hostname_args = [arg for arg in data['args'] if arg.startswith('--hostname=')]
                 self.assertEqual(hostname_args, [f'--hostname={hostname}'] if hostname else [])
                 self.assertNotIn('test-secret', result.stderr)
+        key = self.base / 'node-auth.key'
+        key.write_text('file-secret\n')
+        result = self.run_install(role='node', changes={'TB_OFFLINE': '0', 'NODE_AUTHKEY_FILE': str(key),
+                                 'TEST_STARTED': str(self.base / 'started'), 'TEST_CALLS': str(calls)})
+        data = json.loads(calls.read_text())
+        self.assertIn(f'--auth-key=file:{key}', data['args'])
+        self.assertNotIn('file-secret', result.stderr)
 
-    def test_installed_binaries_without_official_unit_are_repaired(self):
+    def test_authkey_sources_are_exclusive_and_file_must_exist(self):
+        (self.prefix / 'run/systemd/system').mkdir(parents=True)
         self.stub('id', 'print("0")')
-        self.stub('tailscaled', 'print("1.104.5")')
+        self.stub('systemctl', 'raise SystemExit("service must not start")')
+        key = self.base / 'node-auth.key'
+        key.write_text('secret')
+        self.run_install(role='node', changes={'NODE_AUTHKEY': 'secret', 'NODE_AUTHKEY_FILE': str(key)}, expected=1)
+        for path in (self.base / 'missing.key', self.base):
+            with self.subTest(path=path):
+                self.run_install(role='node', changes={'TB_OFFLINE': '0', 'NODE_AUTHKEY_FILE': str(path)},
+                                 expected=2)
+
+    def test_every_role_requires_an_https_server_origin(self):
+        for role in ('control', 'derp', 'node'):
+            for value in ('http://control.example.test', 'https://control.example.test/path', 'control.example.test'):
+                with self.subTest(role=role, value=value):
+                    self.run_install('--dry-run', role=role, changes={'SERVER_URL': value}, expected=1)
+
+    def apt_runtime(self, package, release='ID=ubuntu\nVERSION_CODENAME=resolute\n'):
+        (self.prefix / 'etc').mkdir(parents=True, exist_ok=True)
+        (self.prefix / 'etc/os-release').write_text(release)
+        self.stub('id', 'print("0")')
         self.stub('tailscale', 'print("1.104.5")')
-        self.stub('curl', 'raise SystemExit(22)')
-        # 缺少单元时必须进入包安装路径；下载失败不能误报已安装成功。
-        self.run_install(role='node', changes={'TB_OFFLINE': '0', 'NODE_HOSTNAME': 'test-node'}, expected=1)
+        self.stub('curl', '''
+args=sys.argv[1:]; Path(args[args.index('--output')+1]).write_text(args[-1])
+''')
+        self.stub('sha256sum', '''
+digest, path = Path(sys.argv[2]).read_text().strip().split('  ', 1)
+raise SystemExit(0 if Path(path).read_text().endswith('.noarmor.gpg') else 1)
+''')
+        self.stub('apt-get', 'open(os.environ["TEST_APT"], "a").write(json.dumps(sys.argv[1:])+"\\n")')
+        return {'TB_OFFLINE': '0', 'TEST_TAILSCALE_PACKAGE': package, 'TEST_APT': str(self.base / 'apt')}
+
+    def test_node_installs_pinned_tailscale_from_official_apt_source(self):
+        releases = {'ubuntu resolute': 'ID=ubuntu\nVERSION_CODENAME=resolute\n',
+                    'ubuntu stonking': 'ID=ubuntu\nVERSION_CODENAME=stonking\n',
+                    'debian trixie': 'ID="debian"\nVERSION_CODENAME="trixie"\n'}
+        for package, release in (('', 'ubuntu resolute'), ('deinstall 1.104.5', 'ubuntu stonking'),
+                                 ('installed 1.104.2', 'debian trixie')):
+            with self.subTest(package=package, release=release):
+                (self.base / 'apt').unlink(missing_ok=True)
+                shutil.rmtree(self.prefix, ignore_errors=True)
+                self.run_install(role='node', changes=self.apt_runtime(package, releases[release]))
+                distribution, codename = release.split()
+                source = self.prefix / 'etc/apt/sources.list.d/tailscale.list'
+                self.assertEqual(source.read_text(), 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] '
+                                 f'https://pkgs.tailscale.com/stable/{distribution} {codename} main\n')
+                self.assertTrue((self.prefix / 'usr/share/keyrings/tailscale-archive-keyring.gpg').is_file())
+                calls = [json.loads(line) for line in (self.base / 'apt').read_text().splitlines()]
+                self.assertEqual(calls[0], ['update'])
+                self.assertEqual(calls[1][-1], 'tailscale=1.104.5')
+                self.assertIn('Dpkg::Options::=--force-confold', calls[1])
+
+    def test_node_rejects_distributions_without_an_official_apt_source(self):
+        for release in ('ID=fedora\nVERSION_CODENAME=\n', 'ID=debian\n'):
+            with self.subTest(release=release):
+                result = self.run_install(role='node', changes=self.apt_runtime('', release), expected=2)
+                self.assertIn('requires Ubuntu or Debian', result.stderr)
+                self.assertFalse((self.base / 'apt').exists())
+
+    def test_node_keeps_newer_apt_package_and_rejects_unverified_key(self):
+        self.run_install(role='node', changes=self.apt_runtime('installed 1.104.7'))
+        self.assertFalse((self.base / 'apt').exists())
+        changes = self.apt_runtime('')
+        self.stub('curl', 'args=sys.argv[1:]; Path(args[args.index("--output")+1]).write_text("tampered")')
+        result = self.run_install(role='node', changes=changes, expected=1)
+        self.assertIn('checksum mismatch', result.stderr)
+        self.assertFalse((self.base / 'apt').exists())
+        self.assertFalse((self.prefix / 'etc/apt/sources.list.d/tailscale.list').exists())
 
     def test_missing_first_authkey_is_rejected_before_service_start(self):
         (self.prefix / 'run/systemd/system').mkdir(parents=True)
-        for name in ('lib/systemd/system/tailscaled.service', 'etc/default/tailscaled'):
-            target = self.prefix / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.touch()
         self.stub('id', 'print("0")')
-        self.stub('tailscaled', 'print("1.104.5")')
         self.stub('tailscale', 'print("1.104.5") if sys.argv[1]=="version" else print(json.dumps({"BackendState":"NeedsLogin"}))')
         started = self.base / 'started'
         self.stub('systemctl', 'Path(os.environ["TEST_STARTED"]).touch()')
@@ -652,16 +744,11 @@ elif sys.argv[1] == 'up':
         self.assertFalse(started.exists())
 
     def test_registration_existing_identity_is_never_replaced(self):
-        for name in ('lib/systemd/system/tailscaled.service', 'etc/default/tailscaled'):
-            target = self.prefix / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.touch()
         state = self.prefix / 'var/lib/tailscale/tailscaled.state'
         state.parent.mkdir(parents=True)
         state.write_text('old identity')
         (self.prefix / 'run/systemd/system').mkdir(parents=True)
         self.stub('id', 'print("0")')
-        self.stub('tailscaled', 'print("1.104.5")')
         self.stub('systemctl', 'pass')
         calls = self.base / 'calls'
         self.stub('tailscale', '''
@@ -688,10 +775,6 @@ else:
                 self.assertEqual(state.read_text(), 'old identity')
 
     def exit_runtime(self, backend='Running', systemd=True):
-        for name in ('lib/systemd/system/tailscaled.service', 'etc/default/tailscaled'):
-            path = self.prefix / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
         state = self.prefix / 'var/lib/tailscale/tailscaled.state'
         if backend != 'NeedsLogin':
             state.parent.mkdir(parents=True)
@@ -699,7 +782,6 @@ else:
         if systemd:
             (self.prefix / 'run/systemd/system').mkdir(parents=True)
         self.stub('id', 'print("0")')
-        self.stub('tailscaled', 'print("1.104.5")')
         self.stub('systemctl', 'pass')
         self.stub('sysctl', '''
 p=Path(os.environ['TEST_KERNEL']); values=json.loads(p.read_text()) if p.exists() else {}
@@ -888,6 +970,7 @@ if '/files/' not in url: raise SystemExit(22)
 shutil.copyfile(Path(os.environ['TB_TEMPLATE_DIR']) / url.rsplit('/',1)[1], args[args.index('--output')+1])
 ''')
         self.stub('runuser', 'os.execvp(sys.argv[4], sys.argv[4:])')
+        self.stub('python3', 'pass')
         self.stub('install', '''
 import subprocess
 args = sys.argv[1:]
@@ -943,22 +1026,14 @@ elif sys.argv[1] == 'configtest': raise SystemExit(1)
         for name in ('config.yaml', 'derp.yaml', 'policy.hujson'):
             self.assertFalse(self.config(name).exists())
 
-    def test_partial_control_write_failure_restores_files(self):
-        self.run_install()
-        originals = {p.name: p.read_bytes() for p in self.config().parent.iterdir()}
+    def test_partial_control_write_failure_removes_new_files(self):
         self.stub('mv', '''
 import subprocess
-target = Path(sys.argv[-1])
-marker = Path(os.environ['TEST_FAILED_WRITE'])
-if target.name == 'derp.yaml' and not marker.exists():
-    marker.touch()
-    raise SystemExit(1)
+if Path(sys.argv[-1]).name == 'policy.hujson': raise SystemExit(1)
 raise SystemExit(subprocess.call(['/bin/mv', *sys.argv[1:]]))
 ''')
-        self.run_install('--force', expected=1, changes={'SERVER_URL': 'https://new.example.test',
-                         'DERP_REGION_NAME': 'New Region', 'TEST_FAILED_WRITE': str(self.base / 'failed')})
-        for name, content in originals.items():
-            self.assertEqual(self.config(name).read_bytes(), content)
+        self.run_install(expected=1)
+        self.assertEqual(list(self.config().parent.iterdir()), [])
 
     def test_initial_policy_validation_does_not_require_running_headscale(self):
         changes = self.control_runtime()

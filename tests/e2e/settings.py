@@ -2,6 +2,7 @@
 
 import ipaddress
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -84,6 +85,13 @@ class Settings:
                 raise ValueError("HTTP target must be outside the exit node's directly connected network")
         self.credentials = CREDENTIALS
         self.ssh_alias = "target.tb"
+        # 标准平台；兼容平台用 TB_BASE_IMAGE=debian:13 或 ubuntu:26.10 验证
+        self.base_image = os.environ.get("TB_BASE_IMAGE") or "ubuntu:26.04"
+        if not re.fullmatch(r"[a-z0-9][a-z0-9./_-]*:[a-z0-9][a-z0-9._-]*", self.base_image):
+            raise ValueError("TB_BASE_IMAGE must be an image name with a tag, such as debian:13")
+        # 按基础镜像区分标签，切换平台不会覆盖另一平台的镜像
+        tag = self.base_image.replace("/", "-").replace(":", "-")
+        self.images = {"runtime": f"{self.project}-runtime:{tag}", "systemd": f"{self.project}-systemd:{tag}"}
         self.compose = ["docker", "compose", "-p", self.project,
                         "--project-directory", str(ROOT), "-f", str(ROOT / "compose.yaml")]
         # 迁移机器可显式保留已有外部卷；新实例不需要此文件。
@@ -93,6 +101,7 @@ class Settings:
         self.env = {**os.environ,
                     "TB_E2E_SOURCE": str(ROOT), "TB_E2E_GENERATED": str(self.generated),
                     "TB_E2E_BUNDLE": str(self.bundle), "TB_INSTALL_SOURCE": str(PROJECT_ROOT),
+                    "TB_RUNTIME_IMAGE": self.images["runtime"],
                     "TB_WEBUI_PORT": str(self.webui_port), "TB_SERVER_HOST": self.server_host,
                     "SERVER_URL": self.server_url, "BASE_DOMAIN": self.base_domain,
                     "DERP_REGION_ID": str(region["regionid"]),

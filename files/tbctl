@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Maintain the Headscale control plane: publish policy or DERP map, back up state.
+
+Usage: tbctl publish policy|derp < FILE
+       tbctl backup
+Exit codes: 0 success; 1 invalid input or runtime failure.
+"""
+
+from datetime import datetime, timedelta, timezone
+import os
+from pathlib import Path
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import tempfile
+
+CONFIG = Path('/etc/headscale')
+STATE = Path('/var/lib/headscale')
+BACKUPS = Path('/var/backups/headscale')
+SOCKET = Path('/run/headscale/headscale.sock')
+KEEP_DAYS = 14
+STAMP = '%Y%m%dT%H%M%SZ'
+
+
+def headscale(*args):
+    # Validate as the service account so the check sees the same files and database
+    command = ['headscale', *args]
+    if os.geteuid() == 0:
+        command = ['runuser', '-u', 'headscale', '--', *command]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or 'headscale command failed')
+
+
+def check_policy(path):
+    if SOCKET.exists():
+        headscale('policy', 'check', '--file', str(path))
+    else:
+        headscale('policy', 'check', '--file', str(path), '--bypass-grpc-and-access-database-directly', '--force')
+
+
+def check_derp(path):
+    import yaml
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as error:
+        raise ValueError(f'invalid YAML: {error}') from None
+    regions = data.get('regions') if isinstance(data, dict) else None
+    if not isinstance(regions, dict) or not regions:
+        raise ValueError('DERP map requires at least one region')
+    for region_id, region in regions.items():
+        if type(region_id) is not int or not isinstance(region, dict) or region.get('regionid') != region_id:
+            raise ValueError(f'region {region_id}: key and regionid must be the same integer')
+        nodes = region.get('nodes')
+        if not isinstance(nodes, list) or not nodes:
+            raise ValueError(f'region {region_id}: at least one node is required')
+        for node in nodes:
+            if (not isinstance(node, dict) or node.get('regionid') != region_id
+                    or not node.get('name') or not node.get('hostname')):
+                raise ValueError(f'region {region_id}: each node needs name, hostname and matching regionid')
+
+
+def reload_policy():
+    # Headscale reloads the file policy on SIGHUP; this also works without systemd
+    for entry in Path('/proc').iterdir():
+        try:
+            argv = (entry / 'cmdline').read_bytes().split(b'\0')
+        except OSError:
+            continue
+        if argv[:2] and Path(argv[0].decode()).name == 'headscale' and argv[1:2] == [b'serve']:
+            os.kill(int(entry.name), signal.SIGHUP)
+            return True
+    return False
+
+
+def publish(kind, content):
+    target = CONFIG / ('policy.hujson' if kind == 'policy' else 'derp.yaml')
+    if target.is_symlink() or not target.is_file():
+        raise RuntimeError(f'{target} must be an existing regular file')
+    if target.read_text() == content:
+        print(f'{target} unchanged', file=sys.stderr)
+        return
+    fd, pending = tempfile.mkstemp(prefix=f'.{target.name}.', dir=target.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
+            os.fsync(stream.fileno())
+        if kind == 'policy':
+            check_policy(Path(pending))
+        else:
+            check_derp(Path(pending))
+        os.replace(pending, target)
+    finally:
+        Path(pending).unlink(missing_ok=True)
+    if kind == 'derp':
+        print(f'Published {target}; Headscale applies it within derp.update_frequency', file=sys.stderr)
+    elif reload_policy():
+        print(f'Published {target} and reloaded Headscale', file=sys.stderr)
+    else:
+        print(f'Published {target}; Headscale is not running and loads it at startup', file=sys.stderr)
+
+
+def backup(now=None):
+    now = now or datetime.now(timezone.utc)
+    for entry in BACKUPS.glob('.*'):
+        shutil.rmtree(entry, ignore_errors=True)
+    stamp = now.strftime(STAMP)
+    pending = BACKUPS / f'.{stamp}'
+    pending.mkdir(mode=0o700)
+    # The online backup API copies a consistent snapshot while Headscale writes
+    source = sqlite3.connect(STATE / 'db.sqlite')
+    try:
+        target = sqlite3.connect(pending / 'db.sqlite')
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    finally:
+        source.close()
+    shutil.copy2(STATE / 'noise_private.key', pending)
+    for name in ('config.yaml', 'derp.yaml', 'policy.hujson'):
+        shutil.copy2(CONFIG / name, pending)
+    pending.rename(BACKUPS / stamp)
+    expired = (now - timedelta(days=KEEP_DAYS)).strftime(STAMP)
+    for entry in BACKUPS.iterdir():
+        if not entry.name.startswith('.') and entry.name < expired:
+            shutil.rmtree(entry)
+    print(f'Backed up control state to {BACKUPS / stamp}', file=sys.stderr)
+
+
+def main(args):
+    if args[:1] == ['publish'] and args[1:] in (['policy'], ['derp']):
+        if os.geteuid() != 0:
+            raise RuntimeError('publish must run as root')
+        publish(args[1], sys.stdin.read())
+    elif args == ['backup']:
+        if os.geteuid() == 0:
+            # Root must not create SQLite side files the service account cannot open
+            os.execvp('runuser', ['runuser', '-u', 'headscale', '--', sys.argv[0], 'backup'])
+        backup()
+    else:
+        print(__doc__.strip(), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (ImportError, OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.TimeoutExpired) as error:
+        print(f'Error: {error}', file=sys.stderr)
+        sys.exit(1)

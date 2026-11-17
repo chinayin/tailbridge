@@ -1,0 +1,73 @@
+# 手动触发：用所选基础镜像在 amd64 与 arm64 上运行完整网络与 systemd E2E。
+name: E2E
+# 运行记录显示被测镜像，而不是运行主机。
+run-name: E2E ${{ inputs.image }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Base image
+        type: choice
+        options: [ubuntu:26.04, ubuntu:26.10, debian:13]
+        default: ubuntu:26.04
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}-${{ inputs.image }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: ${{ inputs.image }} ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          # GitHub 没有 arm64 的 -latest 标签；测试都在容器内，运行主机版本不影响结果。
+          - runner: ubuntu-26.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      TB_BASE_IMAGE: ${{ inputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: make setup
+      - name: Install and register test devices
+        id: bootstrap
+        run: make e2e-bootstrap
+      - name: Start optional management UI
+        run: make e2e-ui
+      - name: Full network E2E
+        run: make e2e-test
+      - name: Systemd E2E
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: make e2e-systemd
+      - name: Diagnose failed services
+        if: failure()
+        run: local/.venv/bin/python tests/e2e/e2e.py compose logs --no-color --tail 100
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-reports-${{ matrix.arch }}
+          path: |
+            local/e2e/generated/install-results.json
+            local/e2e/generated/results.json
+            local/e2e/generated/results.html
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Stop test environment
+        if: always()
+        run: make e2e-down

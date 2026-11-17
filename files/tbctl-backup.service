@@ -1,0 +1,10 @@
+[Unit]
+Description=TailBridge Headscale state backup
+After=headscale.service
+
+[Service]
+Type=oneshot
+User=headscale
+Group=headscale
+UMask=0077
+ExecStart=/usr/local/sbin/tbctl backup

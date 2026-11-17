@@ -8,7 +8,7 @@ import sys
 import tempfile
 import uuid
 
-from e2e import Parser, run
+from e2e import Parser, build_image, run
 from settings import load_config, PROJECT_ROOT, ROOT
 from systemd_test import SystemdTest, passed, require
 
@@ -223,9 +223,8 @@ def main():
     version = run(["docker", "exec", source, "/usr/local/bin/derper", "--version"]).stdout.strip()
     require(re.fullmatch(r"\d+\.\d+\.\d+(?:-ERR-BuildInfo)?", version), f"Unexpected derper version: {version}")
     version = version.removesuffix("-ERR-BuildInfo")
-    image = f"{config.project}-systemd-test"
-    run(["docker", "build", "--build-arg", f"RUNTIME_IMAGE={config.project}-runtime",
-         "-f", str(ROOT / "systemd.Dockerfile"), "-t", image, str(ROOT)], capture=False, timeout=600)
+    image = config.images["systemd"]
+    build_image("systemd.Dockerfile", image, RUNTIME_IMAGE=config.images["runtime"])
     container = f"tailbridge-derper-service-{uuid.uuid4().hex[:12]}"
     attempted = False
     created = False

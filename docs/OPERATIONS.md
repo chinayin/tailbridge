@@ -29,25 +29,36 @@ sudo systemctl restart derper
 
 ## 备份与升级
 
-备份 `/etc/headscale/`、完整 `/var/lib/headscale/`、各中继的 `/etc/derper/` 和 `/var/lib/derper/`、自定义目录中的证书、可选 UI 状态，以及安装版本与额外服务配置。备份包含私钥，限制访问并保留异机副本。
+control 每日自动备份到本机 `/var/backups/headscale/`，逻辑与安全说明见 [tbctl 运维工具](INSTALL.md#tbctl-运维工具)。检查定时器和快照：
 
-停止 UI 写入及 Headscale 后复制状态，核验归档摘要，再恢复原运行状态。不要只复制运行中的 SQLite 主文件。升级前检查目标版本配置并跑 E2E；数据库已迁移时，回退必须恢复升级前完整备份及对应旧程序。[上游升级说明](https://headscale.net/stable/setup/upgrade/)
+```bash
+systemctl list-timers tbctl-backup.timer
+sudo ls /var/backups/headscale/
+```
+
+本机备份只防误操作和升级失败，不防整机丢失；异机副本、TLS 私钥、各中继的 `/etc/derper/` 和 `/var/lib/derper/`、可选 UI 状态仍需另行备份。备份包含私钥，限制访问。
+
+升级 Headscale 时，先执行一次 `sudo tbctl backup`，再用首次安装的相同 ENV 重跑 [control 安装命令](INSTALL.md#安装与检查)并追加 `--headscale-version X.Y.Z`；策略和 Map 保持不变，只有 `config.yaml` 与模板不同时才需要 `--force`。升级前检查目标版本配置并跑 E2E。
+
+数据库已迁移时，回退必须恢复升级前的快照及对应旧程序：停止 Headscale，删除 `db.sqlite-wal` / `db.sqlite-shm`，用快照替换 `db.sqlite` 并保持 `headscale` 所有者后再启动。[上游升级说明](https://headscale.net/stable/setup/upgrade/)
 
 恢复先在隔离实例中核验用户、节点 ID / IP / 公钥、策略和真实连接，再切换入口。同一身份不要在两个正式实例同时运行；容器重启测试不替代恢复演练。
 
 ## 中继与访问策略
 
-新增中继按 [命名规则](NODE_NAMING.md) 查重和分配 ID。先检查 DNS、TLS、STUN、接入校验，并通过隔离测试 Map 验证实际转发，再原子替换生产 `/etc/headscale/derp.yaml`，避免读到半写文件。Headscale 每分钟重读，成功后下发；客户端用 `tailscale debug derp-map` 确认，无需重启。部署 derper 不会自动注册到 Map。
+策略和 DERP Map 统一用 [`tbctl publish`](INSTALL.md#tbctl-运维工具) 发布。建议把两份文件的权威版本放在忽略的 `local/` 中做版本管理，回滚即重新发布旧版本。
+
+新增中继按 [命名规则](NODE_NAMING.md) 查重和分配 ID。先检查 DNS、TLS、STUN、接入校验，并通过隔离测试 Map 验证实际转发，再发布生产 Map。Headscale 每分钟重读，成功后下发，客户端用 `tailscale debug derp-map` 确认，无需重启。部署 derper 不会自动注册到 Map。
 
 重读由 `config.yaml` 中的 `derp.auto_update_enabled: true` 和 `derp.update_frequency: 1m` 控制。修改这两个设置须校验并重启 Headscale；定时重读只更新 Map 来源。[上游配置](https://github.com/juanfont/headscale/blob/v0.29.7/config-example.yaml#L130-L135)
 
 退役时先发布不含旧节点的 Map，确认客户端切换，再停止旧中继。控制面维护会影响中继的新接入校验，应安排维护窗口。
 
-访问策略以控制面实际加载的 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），仓库模板不能代表运行中的授权；REST API 不写策略。按用户、设备和目标端口授权，修改后执行 `sudo -u headscale headscale policy check --file /etc/headscale/policy.hujson`，通过后用 `sudo systemctl kill --signal=HUP --kill-who=main headscale` 重载，再验证允许与拒绝两种情况。节点注册、撤销和路由批准通过 [管理 API](API.md) 分别处理。
+访问策略以控制面实际加载的 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），仓库模板只用于首次初始化；REST API 不写策略。按用户、设备和目标端口授权，用 `tbctl publish policy` 发布后，验证允许与拒绝两种情况。节点注册、撤销和路由批准通过 [管理 API](API.md) 分别处理。
 
 ## 重启控制面
 
-保留 `/etc/headscale/` 和 `/var/lib/headscale/`，执行 `sudo systemctl restart headscale`；不要通过重新安装或 `--force` 重启。节点恢复控制连接时沿用身份，无需重新注册。
+保留 `/etc/headscale/` 和 `/var/lib/headscale/`，执行 `sudo systemctl restart headscale`；重启不需要重新安装。节点恢复控制连接时沿用身份，无需重新注册。
 
 - 注册、管理 API / UI 操作、策略及 Map 下发暂时不可用。
 - 已建立的直连通常继续使用缓存密钥和路由；换网、重新发现或密钥到期可能影响连接，不保证业务零中断。[控制与数据平面](https://tailscale.com/docs/concepts/control-data-planes)
@@ -73,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 {"src": ["alice@"], "dst": ["autogroup:internet"], "ip": ["*"]}
 ```
 
-按[访问策略流程](#中继与访问策略)校验并重载。
+按[访问策略流程](#中继与访问策略)用 `tbctl publish policy` 发布。
 
 路由批准与使用授权分别生效，客户端还须主动选择出口，见 [出口切换](#整机出口切换与排查)。[Headscale 路由](https://github.com/juanfont/headscale/blob/v0.29.7/docs/ref/routes.md#exit-node) · [Tailscale 出口](https://tailscale.com/docs/features/exit-nodes)
 

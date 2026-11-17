@@ -1,6 +1,6 @@
 # 安装与配置
 
-适用于 Ubuntu 26.04（`amd64` / `arm64`），需要 Bash 和 curl。按机器承担的角色阅读：[control 控制面](#control-控制面)、[derp 中继](#derp-中继)、[node 设备](#node-设备)。同机部署多个角色时合并相应的端口要求。
+标准平台为 Ubuntu 26.04 LTS，兼容 Ubuntu 26.10 和 Debian 13，均支持 `amd64` / `arm64`；需要 Bash 和 curl。生产服务器优先使用 LTS：26.10 是过渡版本，支持期只有 9 个月。Debian 最小安装通常没有 sudo，以 root 执行时去掉示例中的 `sudo`。按机器承担的角色阅读：[control 控制面](#control-控制面)、[derp 中继](#derp-中继)、[node 设备](#node-设备)。同机部署多个角色时合并相应的端口要求。
 
 首次只需确定控制入口和第一个中继，无需预先规划所有地域。可以先在一台机器安装 control + 独立 derper，后续再添加地域。控制面启动要求 Map 非空；节点接入前还需让其中的中继实际可达，见[架构](ARCHITECTURE.md#组件与角色)。
 
@@ -36,7 +36,7 @@ control / derp 的 `INSTALL_BASE_URL` 默认是 `https://raw.githubusercontent.c
 PROXY=http://127.0.0.1:7890
 curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
   sudo env PROXY="$PROXY" SERVER_URL=https://tailbridge.example.net \
-    NODE_AUTHKEY='<首次注册密钥>' bash -s -- --role node
+    NODE_AUTHKEY_FILE=./node-auth.key bash -s -- --role node
 ```
 
 三个角色均支持 `PROXY=http(s)://[用户:密码@]主机[:端口]`，作用于 curl、apt 和 Go 下载，不写入系统或服务配置。`127.0.0.1` 指执行安装的目标机；容器或远程服务器须使用它能访问的代理地址。
@@ -47,7 +47,9 @@ curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/mai
 
 环境变量只作为安装输入，不自动读取 `.env`。安装器渲染配置模板中的已知 `${ENV_NAME}`，发现未替换标记即失败；安装器与 `files/` 须一起更新。安装后直接维护目标机配置，服务启动和机器重启都不依赖登录 shell 的环境变量。
 
-Headscale 读取 `/etc/headscale/config.yaml`，管理控制面、TLS、DNS 和地址池；同目录的 `derp.yaml` 管理中继列表，`policy.hujson` 管理授权，初始 `grants: []` 拒绝互访。官方 DEB 已包含 `headscale.service`，安装器执行 `systemctl enable --now headscale`。[上游服务文件](https://github.com/juanfont/headscale/blob/v0.29.7/packaging/systemd/headscale.service)
+Headscale 读取 `/etc/headscale/config.yaml`，管理控制面、TLS、DNS 和地址池；同目录的 `derp.yaml` 管理中继列表，`policy.hujson` 管理授权，初始 `grants: []` 拒绝互访。官方 DEB 已包含 `headscale.service`，安装器执行 `systemctl enable --now headscale`。
+
+三份文件的归属不同：`config.yaml` 由安装器按 ENV 渲染并比对，不同时须 `--force`；`derp.yaml` 和 `policy.hujson` 只在缺失时初始化，之后由运维维护，重跑安装器或 `--force` 都不会改动，修改方式见[中继与访问策略](OPERATIONS.md#中继与访问策略)。因此用相同 ENV 重跑 control 即可升级 Headscale。[上游服务文件](https://github.com/juanfont/headscale/blob/v0.29.7/packaging/systemd/headscale.service)
 
 DERP 的 [配置模板](../files/derper.conf) 渲染为 `/etc/derper/derper.conf`，保存四个带双引号的值，例如：
 
@@ -89,7 +91,7 @@ sudo systemctl restart derper
 
 证书模式二选一，另一模式的变量留空：自动证书使用 `ACME_EMAIL` / `TLS_HOSTNAME`；文件证书使用 `TLS_CERT_PATH` / `TLS_KEY_PATH`，续期由部署方负责，私有 CA 需客户端另行信任。
 
-`DERP_*` 填写中继信息，由控制面将同一份 `files/derp.yaml` 渲染为 `/etc/headscale/derp.yaml`，向节点下发。独立 derper 不读取这个文件。首次安装初始化一个区域；后续多区域在控制面的同一文件中维护。
+`DERP_*` 填写中继信息，由控制面将同一份 `files/derp.yaml` 渲染为 `/etc/headscale/derp.yaml`，向节点下发。独立 derper 不读取这个文件。`DERP_*` 只在该文件缺失时生效；已有 Map 保留并提示，后续多区域在同一文件中维护。
 
 `SERVER_URL` 是本项目的安装变量，映射到 Headscale `server_url` 和 Tailscale `--login-server`。官方称后者为协调服务器的基础 URL；它不是设备地址或 DERP 地址。Tailscale 官方客户端默认使用 `https://controlplane.tailscale.com`，接入本项目时改用自己的入口。[官方定义](https://tailscale.com/docs/reference/tailscale-cli/up)
 
@@ -129,6 +131,22 @@ curl -fsS https://tailbridge.example.net/health
 配置检查可能创建数据库和密钥，因此使用服务用户。配置位置和服务读取方式见[配置持久化](#配置持久化)。
 
 配置写入或校验失败时，安装器恢复原有三份配置及权限；首次安装则移除本次新建配置。用户、注册密钥、节点和路由通过 [REST API](API.md) 管理。
+
+### tbctl 运维工具
+
+control 同时安装 `/usr/local/sbin/tbctl` 和每日执行的 `tbctl-backup.timer`。工具依赖 `python3-yaml`，缺失时由安装器安装；重跑安装器会更新工具和定时器。
+
+| 命令 | 作用 |
+| --- | --- |
+| `sudo tbctl publish policy < policy.hujson` | 以 `headscale` 账户执行 `headscale policy check`（服务运行中经 gRPC 校验），通过后原子替换 `/etc/headscale/policy.hujson`，并发送 SIGHUP 重载 |
+| `sudo tbctl publish derp < derp.yaml` | 校验 YAML 结构及区域、节点 ID 一致，通过后原子替换 `/etc/headscale/derp.yaml`；Headscale 按 `derp.update_frequency` 自动重读 |
+| `sudo tbctl backup` | 立即备份，与定时器相同 |
+
+`publish` 从 stdin 读取完整文件；校验失败时原文件不变，内容相同时不做任何操作。退出码 `0` 成功，`1` 输入无效或执行失败。
+
+**备份逻辑**：定时器每天随机延迟一小时内触发；关机错过的执行在开机后补跑。它以 `headscale` 服务账户执行 `tbctl backup`：用 SQLite 在线备份 API 从运行中的数据库生成一致快照，连同 `noise_private.key` 和 `/etc/headscale/` 下的三份配置写入 `/var/backups/headscale/<UTC时间>/`，并删除 14 天前的快照。
+
+**安全性**：备份直接读取本机文件，不调用 REST API，不需要也不保存管理 API Key。备份目录为 `headscale:headscale 0700`，与 `/var/lib/headscale/` 的访问范围相同，没有新增可读者。快照中包含控制面 Noise 私钥和数据库里的节点、注册密钥信息，复制到异机时必须加密传输和存储。TLS 私钥不在备份内。恢复步骤见[备份与升级](OPERATIONS.md#备份与升级)。
 
 初始模板见 [files/](../files/)，固定地址池为 `100.77.0.0/23`、`fd7a:115c:a1e0:77::/64`，部署前检查冲突；内置和公共 DERP 均关闭。后续变更直接维护目标机配置，见[运维](OPERATIONS.md)。
 
@@ -190,7 +208,8 @@ sudo journalctl -u derper -n 50 --no-pager
 | 变量 | 要求 | 默认值 | 用途与格式 |
 | --- | --- | --- | --- |
 | `SERVER_URL` | 必填 | 无 | 与 control 配置的完整 URL 一致，作为 Tailscale `--login-server` |
-| `NODE_AUTHKEY` | 首次注册必填 | 无 | 控制面签发的注册密钥；已有有效身份时忽略，不是管理 API Key，也不代表互访授权 |
+| `NODE_AUTHKEY_FILE` | 首次注册必填（推荐） | 无 | 注册密钥文件路径，如 [REST 流程](API.md#用户与注册密钥)生成的 `node-auth.key`；密钥不进入命令行和进程列表。已有有效身份时忽略，不是管理 API Key，也不代表互访授权 |
+| `NODE_AUTHKEY` | 与上项二选一 | 无 | 直接传入注册密钥；会出现在 `sudo env` 命令行和 shell 历史中，仅用于无法传文件的场景 |
 | `NODE_HOSTNAME` | 可选 | 本机 hostname | 首次注册时指定设备名；重跑不改名 |
 | `ADVERTISE_EXIT_NODE` | 可选 | 未设置 | `true` 开启并持久化 IP 转发、宣告出口；`false` 撤销出口宣告；省略或空值保留现状。撤销宣告保留节点身份、其他子网路由和系统转发设置 |
 
@@ -217,9 +236,11 @@ sudo journalctl -u derper -n 50 --no-pager
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
   sudo env SERVER_URL=https://tailbridge.example.net \
-    NODE_AUTHKEY='<首次注册密钥>' \
+    NODE_AUTHKEY_FILE=./node-auth.key \
     bash -s -- --role node
 ```
+
+Tailscale 从官方 apt 源 `pkgs.tailscale.com` 安装：首次固定为安装器的默认版本，之后随系统 `apt upgrade` 更新；重跑安装器保留更新的版本，不降级。软件源按 `/etc/os-release` 的发行版与代号选择，如 `ubuntu resolute`、`debian trixie`；签名密钥按脚本中的摘要校验。
 
 安装成功后检查连接：
 
@@ -264,7 +285,7 @@ Headplane 不属于上述安装角色，控制地址、管理 API Key 和入口�
 ## 共用选项与验证
 
 - `--dry-run`：显示计划，不下载、写入或启动；不验证 DNS、网络和证书有效性。
-- `--force`：允许覆盖所选角色的不同配置；control 会重置已有策略和中继列表，derp 会覆盖配置与服务文件，使用前先[备份](OPERATIONS.md#备份与升级)；不清除数据库、密钥或节点身份。
+- `--force`：允许覆盖所选角色的不同配置：control 只覆盖 `config.yaml`，不改策略和中继列表；derp 覆盖配置与服务文件；node 覆盖出口转发配置。使用前先[备份](OPERATIONS.md#备份与升级)；不清除数据库、密钥或节点身份。
 - `--headscale-version X.Y.Z`、`--tailscale-version X.Y.Z`：覆盖默认版本，后者同时用于 derper；不带 `v`。默认值见[脚本顶部](../install.sh)，Go 由维护者更新。
 - `--version` 查看安装器版本，`--help` 查看帮助。退出码 `0` 表示所选阶段完成，`1` 表示参数或运行错误，`2` 表示前提不足；无 systemd 的成功不代表服务已启动。
 

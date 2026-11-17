@@ -6,7 +6,7 @@ import subprocess
 import sys
 import uuid
 
-from e2e import Parser, run
+from e2e import Parser, build_image, run
 from settings import load_config, PROJECT_ROOT, ROOT
 from systemd_test import SystemdTest, passed, require
 
@@ -41,7 +41,7 @@ class ControlNodeTest(SystemdTest):
                                    "http://127.0.0.1:8080/files/config.yaml", check=False).returncode == 0,
                   "template server")
 
-    def install(self, role, *, authkey=None, check=True, **settings):
+    def install(self, role, *, check=True, **settings):
         environment = {
             "INSTALL_BASE_URL": "http://127.0.0.1:8080", "SERVER_URL": SERVER_URL,
             "PROXY": self.proxy, "HTTP_PROXY": "", "HTTPS_PROXY": "", "ALL_PROXY": "",
@@ -56,13 +56,14 @@ class ControlNodeTest(SystemdTest):
         else:
             environment["NODE_HOSTNAME"] = NODE_NAME
         environment.update(settings)
-        if authkey is not None:
-            environment["NODE_AUTHKEY"] = authkey
         # Keep registration and proxy credentials out of command arguments and timeout errors
         return run(["docker", "exec", "-i", self.container, "python3", "-c",
                     "import json,os,sys; settings=json.load(sys.stdin); "
                     "os.execvpe('bash',['bash','/source/install.sh','--role',sys.argv[1]],{**os.environ,**settings})", role],
                    input=json.dumps(environment), timeout=1800, check=check)
+
+    def stdin(self, data, *args):
+        return run(["docker", "exec", "-i", self.container, *args], input=data)
 
     def pid(self, unit):
         return int(self.exec("systemctl", "show", unit, "--property=MainPID", "--value").stdout)
@@ -154,7 +155,17 @@ class ControlNodeTest(SystemdTest):
         require(self.exec("headscale", "version").stdout.splitlines()[0] == f"headscale version v{package}",
                 "Headscale does not match the installed DEB")
         self.exec("runuser", "-u", "headscale", "--", "headscale", "configtest")
+        self.exec("bash", "-c", "! grep -qs tailbridge-install /usr/sbin/policy-rc.d && ! test -e /usr/sbin/policy-rc.d.tailbridge")
         passed("control installs the official DEB and enables non-root Headscale with trusted HTTPS")
+
+        self.exec("systemctl", "is-enabled", "--quiet", "tbctl-backup.timer")
+        self.exec("systemctl", "is-active", "--quiet", "tbctl-backup.timer")
+        self.exec("systemctl", "start", "tbctl-backup.service")
+        snapshot = self.exec("bash", "-c", "ls -d /var/backups/headscale/2*").stdout.split()
+        require(len(snapshot) == 1, "Backup did not create one snapshot")
+        require(self.exec("stat", "-c", "%U %a", f"{snapshot[0]}/db.sqlite").stdout.split() == ["headscale", "600"],
+                "Backup is not private to the service account")
+        passed("backup timer is enabled and snapshots control state as the service account")
 
         rejected = self.install("node", check=False)
         require(rejected.returncode == 2, "First registration did not require NODE_AUTHKEY")
@@ -165,9 +176,13 @@ class ControlNodeTest(SystemdTest):
         self.headscale("users", "create", "systemd")
         user = next(value for value in self.headscale("users", "list") if value["name"] == "systemd")
         key = self.headscale("preauthkeys", "create", "--user", str(user["id"]), "--expiration", "10m")["key"]
-        print("Installing and registering node from official packages...", file=sys.stderr, flush=True)
-        self.install("node", authkey=key)
+        self.stdin(key + "\n", "sh", "-c", "umask 077; cat > /root/node-auth.key")
+        print("Installing and registering node from the official apt source...", file=sys.stderr, flush=True)
+        self.install("node", NODE_AUTHKEY_FILE="/root/node-auth.key")
         self.node_ready()
+        require(self.exec("dpkg-query", "-W", "-f=${db:Status-Status}", "tailscale").stdout == "installed",
+                "Tailscale is not managed by dpkg")
+        self.exec("test", "-s", "/etc/apt/sources.list.d/tailscale.list")
         for unit in ("headscale", "tailscaled"):
             fragment = self.exec("systemctl", "show", unit, "--property=FragmentPath", "--value").stdout.strip()
             require(fragment in {f"/lib/systemd/system/{unit}.service", f"/usr/lib/systemd/system/{unit}.service"},
@@ -187,6 +202,14 @@ class ControlNodeTest(SystemdTest):
         prefs = json.loads(self.exec("tailscale", "debug", "prefs").stdout)
         require(prefs["Hostname"] == NODE_NAME and prefs["ControlURL"] == SERVER_URL, "Reinstall changed saved preferences")
         passed("control and node reinstall preserves service processes, configuration and registered identity")
+
+        policy = '{"grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"]}]}\n'
+        self.stdin(policy, "tbctl", "publish", "policy")
+        self.install("control")
+        require(self.exec("cat", "/etc/headscale/policy.hujson").stdout == policy, "Reinstall replaced the policy")
+        require(self.pid("headscale") == pids[0], "Reinstall with a maintained policy restarted Headscale")
+        files = self.files()
+        passed("control reinstall keeps a policy published with tbctl")
 
         rejected = self.install("node", check=False, SERVER_URL="https://wrong.systemd.test")
         require(rejected.returncode == 2 and self.identity() == baseline, "Wrong control URL did not preserve identity")
@@ -231,9 +254,8 @@ def main():
     parser.add_argument("--config", help="Existing E2E environment file")
     args = parser.parse_args()
     config = load_config(args.config)
-    image = f"{config.project}-systemd-test"
-    run(["docker", "build", "--build-arg", f"RUNTIME_IMAGE={config.project}-runtime",
-         "-f", str(ROOT / "systemd.Dockerfile"), "-t", image, str(ROOT)], capture=False, timeout=600)
+    image = config.images["systemd"]
+    build_image("systemd.Dockerfile", image, RUNTIME_IMAGE=config.images["runtime"])
     container = f"tailbridge-control-node-service-{uuid.uuid4().hex[:12]}"
     attempted = False
     created = False
