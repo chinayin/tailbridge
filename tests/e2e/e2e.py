@@ -38,6 +38,13 @@ def run(args, *, capture=True, check=True, env=None, timeout=45, input=None):
     return result
 
 
+def build_image(dockerfile, tag, **build_args):
+    # Dockerfile 经 stdin 传入，不发送构建上下文，local/ 中的凭据不会到达 Docker daemon
+    args = [item for key, value in build_args.items() for item in ("--build-arg", f"{key}={value}")]
+    run(["docker", "build", *args, "-t", tag, "-"], input=(ROOT / dockerfile).read_text(),
+        capture=False, timeout=600)
+
+
 def compose(*args, bootstrap=False, **kwargs):
     extra = ["-f", str(ROOT / "compose.bootstrap.yaml")] if bootstrap else []
     return run([*CONFIG.compose, *extra, *args], env=CONFIG.env, **kwargs)
@@ -125,18 +132,23 @@ def configure_exit_node():
     for service in CONFIG.nodes:
         own = json.loads(compose("exec", "-T", service, "tailscale", "status", "--json").stdout)["Self"]
         states[service] = {"id": own["ID"], "ips": own["TailscaleIPs"]}
-    # 由控制面写入并校验同一文件视图，避免宿主机共享目录的元数据延迟。
-    compose('exec', '-T', 'control', 'python3', '/app/publish_policy.py',
+    # 使用生产运维工具在控制面内校验、原子发布并重载，避免宿主机共享目录的元数据延迟。
+    compose('exec', '-T', 'control', 'tbctl', 'publish', 'policy',
             input=json.dumps(exit_policy(CONFIG, states), indent=2) + '\n')
-    compose("exec", "-T", "control", "headscale", "policy", "check", "--file", "/etc/headscale/policy.hujson")
-    compose("kill", "--signal", "SIGHUP", "control")
     headscale("nodes", "approve-routes", "--identifier", str(states[CONFIG.service("exit")]["id"]),
               "--routes", "0.0.0.0/0,::/0")
 
 
 def up(bootstrap=False):
     prepare()
-    compose("build", "control", capture=False, timeout=600)
+    build_image("node.Dockerfile", CONFIG.images["runtime"], BASE_IMAGE=CONFIG.base_image)
+    # 输入格式由安装器统一校验；启动前先失败，避免等待安装超时。
+    compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "bash", "control",
+            "/app/install.sh", "--role", "control", "--force", "--dry-run")
+    # 策略与 Map 只在缺失时由安装器初始化；删除后按当前配置重新生成，并重新验证初始拒绝。
+    compose("stop", "control", timeout=60)
+    for name in ("derp.yaml", "policy.hujson"):
+        (CONFIG.bundle / "config" / name).unlink(missing_ok=True)
     # Headscale 不热加载域名；确保新的生成配置实际被进程读取。
     compose("up", "-d", "--force-recreate", "control", capture=False, timeout=600)
     compose("up", "-d", "--no-build", "probe", "httpbin", *CONFIG.relays, capture=False, timeout=600)

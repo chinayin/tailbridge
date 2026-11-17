@@ -76,21 +76,23 @@ def identity(service):
     return {"id": own["ID"], "public_key": own["PublicKey"], "ips": own["TailscaleIPs"]}
 
 
-def ubuntu_runtime():
+def base_runtime():
+    name, version = CONFIG.base_image.rsplit(":", 1)
+    distribution = name.rsplit("/", 1)[-1]
     runtimes = {}
     for service in ("control", *NODES):
         release = compose("exec", "-T", service, "cat", "/etc/os-release").stdout
         values = dict(line.split("=", 1) for line in release.splitlines() if "=" in line)
-        require(values.get("ID", "").strip('"') == "ubuntu"
-                and values.get("VERSION_ID", "").strip('"') == "26.04", f"Wrong Ubuntu runtime: {service}")
+        require(values.get("ID", "").strip('"') == distribution
+                and values.get("VERSION_ID", "").strip('"') == version, f"Wrong base image runtime: {service}")
         pid1 = compose("exec", "-T", service, "cat", "/proc/1/comm").stdout.strip()
         require(pid1 not in ("systemd", "init"), f"Full init system running in {service}")
-        runtimes[service] = {"ubuntu": "26.04", "pid1": pid1}
+        runtimes[service] = {distribution: version, "pid1": pid1}
     package = compose("exec", "-T", "control", "dpkg-query", "-W", "-f=${Version}", "headscale").stdout
     require(package == REPORT["versions"]["headscale"].splitlines()[0].removeprefix("headscale version v"),
             "Headscale binary does not match installed DEB")
     REPORT["versions"]["runtime"] = runtimes
-    passed("Ubuntu 26.04 control and nodes run official programs without systemd", headscale_deb=package)
+    passed(f"{distribution} {version} control and nodes run official programs without systemd", headscale_deb=package)
 
 
 def management_api():
@@ -434,7 +436,7 @@ def control_reload(states):
     expected = json.loads(json.dumps(baseline))
     expected["Regions"][str(region_id)]["RegionName"] = new_name
 
-    # 从容器内原子替换，保留权限，避免定时读取撞上半写文件。
+    # 控制容器不可用时的宿主机兜底：原子替换并保留权限。
     write_map = """
 import os, pathlib, sys, tempfile
 path = pathlib.Path(sys.argv[1])
@@ -451,7 +453,8 @@ finally:
 """
 
     def publish(content):
-        node("control", "python3", "-c", write_map, path, content)
+        # 与生产运维相同的发布路径：控制面内校验并原子替换
+        node("control", "tbctl", "publish", "derp", input=content)
 
     def received(value):
         for name in NODES:
@@ -576,7 +579,7 @@ def main():
             "tailscale": node(CLIENTS[0], "tailscale", "version").stdout.splitlines()[0],
             "headscale": compose("exec", "-T", "control", "headscale", "version").stdout.strip(),
         }
-        ubuntu_runtime()
+        base_runtime()
         if not args.exit_only:
             management_api()
         states = {name: eventually(lambda name=name: identity(name)) for name in NODES} if args.exit_only else basic()

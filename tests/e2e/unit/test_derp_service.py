@@ -33,9 +33,11 @@ class SystemdServiceCleanupTests(unittest.TestCase):
             output = "source-container" if args[:2] == ["docker", "compose"] else "1.104.5-ERR-BuildInfo"
             return subprocess.CompletedProcess(args, 0, output, "")
 
-        config = SimpleNamespace(compose=["docker", "compose"], env={}, project="cleanup-test")
+        config = SimpleNamespace(compose=["docker", "compose"], env={}, project="cleanup-test",
+                                 images={"runtime": "cleanup-runtime", "systemd": "cleanup-systemd"})
         with patch.object(module, "run", side_effect=run), \
                 patch.object(module, "load_config", return_value=config), \
+                patch.object(module, "build_image"), \
                 patch.object(module.sys, "argv", [module.__name__ + ".py"]):
             with self.assertRaises(subprocess.TimeoutExpired) as caught:
                 module.main()
@@ -56,9 +58,11 @@ class SystemdServiceCleanupTests(unittest.TestCase):
                     if "journalctl" in args or args[:2] == ["docker", "logs"]:
                         raise subprocess.TimeoutExpired(args, 45)
                     return subprocess.CompletedProcess(args, 0, "1.104.5-ERR-BuildInfo", "")
-                config = SimpleNamespace(compose=["docker", "compose"], env={}, project="cleanup-test")
+                config = SimpleNamespace(compose=["docker", "compose"], env={}, project="cleanup-test",
+                                 images={"runtime": "cleanup-runtime", "systemd": "cleanup-systemd"})
                 with patch.object(module, "run", side_effect=run), \
                         patch.object(module, "load_config", return_value=config), \
+                        patch.object(module, "build_image"), \
                         patch.object(module.sys, "argv", [module.__name__ + ".py"]), \
                         patch.object(service, "verify", side_effect=failure), redirect_stderr(io.StringIO()):
                     with self.assertRaises(RuntimeError) as caught:
@@ -69,13 +73,16 @@ class SystemdServiceCleanupTests(unittest.TestCase):
     def test_proxy_and_registration_credentials_are_passed_only_on_stdin(self):
         service = control_node_service.ControlNodeTest("test-container", "http://" + "user:proxy-secret" + "@proxy.test")
         with patch.object(control_node_service, "run") as execute:
-            service.install("node", authkey="registration-secret")
-        args = execute.call_args.args[0]
-        values = json.loads(execute.call_args.kwargs["input"])
-        self.assertNotIn("proxy-secret", " ".join(args))
-        self.assertNotIn("registration-secret", " ".join(args))
+            service.stdin("registration-secret\n", "sh", "-c", "umask 077; cat > /root/node-auth.key")
+            service.install("node", NODE_AUTHKEY_FILE="/root/node-auth.key")
+        (key_call, install_call) = execute.call_args_list
+        self.assertEqual(key_call.kwargs["input"], "registration-secret\n")
+        values = json.loads(install_call.kwargs["input"])
+        for call in (key_call, install_call):
+            self.assertNotIn("proxy-secret", " ".join(call.args[0]))
+            self.assertNotIn("registration-secret", " ".join(call.args[0]))
         self.assertEqual(values["PROXY"], service.proxy)
-        self.assertEqual(values["NODE_AUTHKEY"], "registration-secret")
+        self.assertEqual(values["NODE_AUTHKEY_FILE"], "/root/node-auth.key")
 
     def test_running_node_must_reconnect_to_control_before_reporting_ready(self):
         service = control_node_service.ControlNodeTest("test-container")

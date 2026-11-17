@@ -5,6 +5,10 @@ set -euo pipefail
 VERSION=0.6.0
 HEADSCALE_VERSION=0.29.7
 TAILSCALE_VERSION=1.104.5
+TAILSCALE_REPO=https://pkgs.tailscale.com/stable
+# Official apt signing key 2596A99EAAB33821893C0A79458CA832957F5868
+TAILSCALE_KEYRING_SHA256=3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39
+POLICY_RC=/usr/sbin/policy-rc.d
 INSTALL_BASE_URL=${INSTALL_BASE_URL:-https://raw.githubusercontent.com/chinayin/tailbridge/main}
 DERP_PORT=${DERP_PORT:-443}
 DERP_CERT_DIR=${DERP_CERT_DIR:-/etc/derper/certs}
@@ -25,7 +29,8 @@ Usage: install.sh --role control|derp|node [options]
        install.sh test [--exit-node NAME_OR_IP]
   --headscale-version X.Y.Z   Override the Headscale version
   --tailscale-version X.Y.Z   Override the Tailscale and derper version
-  --force                    Replace differing configuration (never identity)
+  --force                    Replace differing config.yaml or derper configuration
+                             (never policy, DERP map or identity)
   --dry-run                  Show URLs and paths without making changes
   --version                  Show the installer version
   -h, --help                 Show this help
@@ -33,7 +38,9 @@ Control environment: SERVER_URL,
 BASE_DOMAIN, DERP_REGION_ID, DERP_REGION_CODE, DERP_REGION_NAME, DERP_NODE_NAME,
 DERP_HOSTNAME; DERP_PORT defaults to 443. TLS_HOSTNAME and
 ACME_EMAIL for ACME, or TLS_CERT_PATH and TLS_KEY_PATH for file certificates.
-DERP_IPV4 is optional. The Go toolchain version is maintained in this script.
+DERP_IPV4 is optional. DERP_* and the deny-all policy only seed missing files;
+maintain them afterward with tbctl. A daily timer backs up state
+to /var/backups/headscale. The Go toolchain version is maintained in this script.
 DERP environment: SERVER_URL, DERP_HOSTNAME;
 DERP_PORT defaults to 443, DERP_CERT_DIR to /etc/derper/certs.
 Provide <DERP_HOSTNAME>.crt and .key before installing. systemd enables derper;
@@ -41,8 +48,9 @@ without systemd the caller must start the relay using /etc/derper/derper.conf.
 INSTALL_BASE_URL overrides the template source (defaults to this repository's main).
 PROXY optionally sets an HTTP(S) proxy for downloads (curl, apt, Go), not saved.
 NO_PROXY / no_proxy controls bypasses; default: localhost,127.0.0.1,::1.
-Node environment: SERVER_URL; NODE_AUTHKEY for first registration.
-NODE_HOSTNAME is optional; otherwise Tailscale uses the local hostname.
+Node environment: SERVER_URL; NODE_AUTHKEY_FILE (preferred) or NODE_AUTHKEY for
+first registration. Tailscale comes from the official apt source; newer packages
+are kept. NODE_HOSTNAME is optional; otherwise Tailscale uses the local hostname.
 ADVERTISE_EXIT_NODE=true enables IP forwarding and advertises an exit node;
 false withdraws the advertisement while preserving IP forwarding settings.
 Unset or empty preserves existing settings. Route approval is separate.
@@ -119,9 +127,12 @@ validate_inputs() {
         false) ;;
         *) die 'ADVERTISE_EXIT_NODE must be true or false' ;;
     esac
+    require_var SERVER_URL "${SERVER_URL:-}"
+    printf '%s\n' "${SERVER_URL}" | LC_ALL=C grep -Eq '^https://[a-zA-Z0-9.-]+(:[0-9]+)?/?$' ||
+        die 'SERVER_URL must be an HTTPS origin'
+    SERVER_URL=${SERVER_URL%/}
     case "${ROLE}" in
         control)
-            require_var SERVER_URL "${SERVER_URL:-}"
             require_var BASE_DOMAIN "${BASE_DOMAIN:-}"
             require_var DERP_REGION_ID "${DERP_REGION_ID:-}"
             require_var DERP_REGION_CODE "${DERP_REGION_CODE:-}"
@@ -146,33 +157,29 @@ validate_inputs() {
             [ "${DERP_REGION_ID}" -le 65535 ] || die 'DERP region ID must be between 1 and 65535'
             printf '%s\n' "${DERP_REGION_CODE}" | LC_ALL=C grep -Eq '^[a-z][a-z0-9-]{0,31}$' || die 'invalid DERP region code'
             printf '%s\n' "${DERP_NODE_NAME}" | LC_ALL=C grep -Eq '^[a-z][a-z0-9-]{0,47}$' || die 'invalid DERP node name'
-            printf '%s\n' "${DERP_REGION_NAME}" | LC_ALL=C grep -q '[^[:space:]]' || die 'DERP region name must not be blank'
-            case "${DERP_PORT}" in *[!0-9]*|'') die 'invalid DERP port' ;; esac
-            [ "${DERP_PORT}" -ge 1 ] && [ "${DERP_PORT}" -le 65535 ] || die 'invalid DERP port' ;;
+            printf '%s\n' "${DERP_REGION_NAME}" | LC_ALL=C grep -q '[^[:space:]]' || die 'DERP region name must not be blank' ;;
         derp)
-            require_var SERVER_URL "${SERVER_URL:-}"
             require_var DERP_HOSTNAME "${DERP_HOSTNAME:-}"
             for value in "${SERVER_URL}" "${DERP_HOSTNAME}" "${DERP_CERT_DIR}"; do
                 reject_value "${value}"
                 case "${value}" in *\$*|*%*|*\`*) die 'expansions are not allowed in DERP settings' ;; esac
             done
-            printf '%s\n' "${SERVER_URL}" | LC_ALL=C grep -Eq '^https://[a-zA-Z0-9.-]+(:[0-9]+)?/?$' ||
-                die 'SERVER_URL must be an HTTPS origin'
-            SERVER_URL=${SERVER_URL%/}
             printf '%s\n' "${DERP_HOSTNAME}" | LC_ALL=C grep -Eq '^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$' ||
                 die 'invalid DERP hostname'
-            case "${DERP_CERT_DIR}" in /*) ;; *) die 'DERP_CERT_DIR must be an absolute path' ;; esac
-            case "${DERP_PORT}" in *[!0-9]*|'') die 'invalid DERP port' ;; esac
-            [ "${DERP_PORT}" -ge 1 ] && [ "${DERP_PORT}" -le 65535 ] || die 'invalid DERP port' ;;
-        node) require_var SERVER_URL "${SERVER_URL:-}" ;;
+            case "${DERP_CERT_DIR}" in /*) ;; *) die 'DERP_CERT_DIR must be an absolute path' ;; esac ;;
+        node)
+            [ -z "${NODE_AUTHKEY:-}" ] || [ -z "${NODE_AUTHKEY_FILE:-}" ] ||
+                die 'NODE_AUTHKEY and NODE_AUTHKEY_FILE are mutually exclusive' ;;
     esac
+    if [ "${ROLE}" != node ]; then
+        case "${DERP_PORT}" in *[!0-9]*|'') die 'invalid DERP port' ;; esac
+        [ "${DERP_PORT}" -ge 1 ] && [ "${DERP_PORT}" -le 65535 ] || die 'invalid DERP port'
+    fi
 }
 
 package_urls() {
     HEADSCALE_FILE="headscale_${HEADSCALE_VERSION}_linux_${ARCH}.deb"
     HEADSCALE_URL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
-    TAILSCALE_FILE="tailscale_${TAILSCALE_VERSION}_${ARCH}.tgz"
-    TAILSCALE_URL="https://pkgs.tailscale.com/stable/${TAILSCALE_FILE}"
     GO_FILE="go${GO_VERSION}.linux-${ARCH}.tar.gz"
 }
 
@@ -180,13 +187,18 @@ print_plan() {
     printf 'Installer: %s\n' "${VERSION}" >&2
     case "${ROLE}" in
         control)
-            for file in config.yaml derp.yaml policy.hujson; do
-                printf '%s -> %s/etc/headscale/%s (compare; --force required if different)\n' \
+            printf '%s/files/config.yaml -> %s/etc/headscale/config.yaml (compare; --force required if different)\n' \
+                "${INSTALL_BASE_URL%/}" "${TB_PREFIX}" >&2
+            for file in derp.yaml policy.hujson; do
+                printf '%s -> %s/etc/headscale/%s (create if absent; existing file kept)\n' \
                     "${INSTALL_BASE_URL%/}/files/${file}" "${TB_PREFIX}" "${file}" >&2
             done
-            printf '%s/%s -> official headscale service\n' "${HEADSCALE_URL}" "${HEADSCALE_FILE}" >&2 ;;
+            printf '%s/%s -> official headscale service\n' "${HEADSCALE_URL}" "${HEADSCALE_FILE}" >&2
+            printf '%s/files/tbctl -> %s/usr/local/sbin/tbctl\n' "${INSTALL_BASE_URL%/}" "${TB_PREFIX}" >&2
+            printf 'tbctl-backup.timer: daily state backup to %s/var/backups/headscale\n' "${TB_PREFIX}" >&2 ;;
         node)
-            printf '%s -> official tailscaled service; register after daemon startup\n' "${TAILSCALE_URL}" >&2
+            printf '%s/<ubuntu|debian> tailscale=%s (newer packages kept) -> official tailscaled service; register after daemon startup\n' \
+                "${TAILSCALE_REPO}" "${TAILSCALE_VERSION}" >&2
             case "${ADVERTISE_EXIT_NODE:-}" in
                 true) printf 'Enable IPv4/IPv6 forwarding via %s/etc/sysctl.d/99-tailbridge-exit-node.conf; advertise exit after registration\n' "${TB_PREFIX}" >&2 ;;
                 false) printf 'Withdraw exit advertisement after registration; preserve IP forwarding settings\n' >&2 ;;
@@ -222,12 +234,15 @@ cleanup() {
         fi
         warn 'configuration restored after installation failure'
     fi
-    if [ -n "${POLICY_GUARD}" ]; then
-        rm -f /usr/sbin/policy-rc.d
-        if [ -e "${TMP}/policy-rc.d" ]; then mv "${TMP}/policy-rc.d" /usr/sbin/policy-rc.d; fi
-    fi
+    [ -z "${POLICY_GUARD}" ] || release_policy_guard
     [ -z "${STAGED}" ] || rm -f "${STAGED}"
     [ -z "${TMP}" ] || rm -rf "${TMP}"
+}
+release_policy_guard() {
+    rm -f "${POLICY_RC}"
+    if [ -e "${POLICY_RC}.tailbridge" ] || [ -L "${POLICY_RC}.tailbridge" ]; then
+        mv "${POLICY_RC}.tailbridge" "${POLICY_RC}"
+    fi
 }
 prepare_tmp() {
     umask 077
@@ -261,11 +276,15 @@ with_proxy() (
     "$@"
 )
 
+apt_install() {
+    with_proxy apt-get update >&2 || die 'apt index update failed'
+    DEBIAN_FRONTEND=noninteractive with_proxy apt-get install -y --no-install-recommends "$@" >&2 ||
+        die 'package installation failed'
+}
 install_tool() {
     [ "${TB_OFFLINE}" != 1 ] || return 0
     command -v "$1" >/dev/null 2>&1 && return 0
-    with_proxy apt-get update >&2 || die 'apt index update failed'
-    DEBIAN_FRONTEND=noninteractive with_proxy apt-get install -y --no-install-recommends "${2:-$1}" ca-certificates >&2 || die 'dependency installation failed'
+    apt_install "${2:-$1}" ca-certificates
 }
 
 download() {
@@ -310,22 +329,30 @@ apply_template() {
     write_replaced "${TMP}/$1.source" "${TMP}/$1"
 }
 
+publish_file() {
+    # Stage beside the target so readers never see a partial file
+    STAGED=$(mktemp "$3.XXXXXX")
+    install -m "$1" "$2" "${STAGED}"
+    mv -f "${STAGED}" "$3"
+    STAGED=''
+}
+
 check_overwrite() {
-    conflict=0
     for file in config.yaml derp.yaml policy.hujson; do
         target="${TB_PREFIX}/etc/headscale/${file}"
         [ ! -L "${target}" ] || die "refusing configuration symlink: ${target}"
         [ ! -e "${target}" ] || [ -f "${target}" ] || die "configuration is not a regular file: ${target}"
-        if [ -e "${target}" ] && ! cmp -s "${TMP}/${file}" "${target}"; then
-            conflict=1
-            warn "configuration differs: ${target}"
-            case "${file}" in
-                policy.hujson) warn 'replacing policy.hujson resets access grants to deny all' ;;
-                derp.yaml) warn 'replacing derp.yaml replaces the existing relay regions' ;;
-            esac
-        fi
     done
-    [ "${conflict}" = 0 ] || [ "${FORCE}" = 1 ] || die 'configuration exists; use --force to replace it'
+    target="${TB_PREFIX}/etc/headscale/config.yaml"
+    if [ -e "${target}" ] && ! cmp -s "${TMP}/config.yaml" "${target}"; then
+        warn "configuration differs: ${target}"
+        [ "${FORCE}" = 1 ] || die 'configuration exists; use --force to replace it'
+    fi
+    # The policy and DERP map are seeds; operators maintain them with tbctl
+    target="${TB_PREFIX}/etc/headscale/derp.yaml"
+    if [ -e "${target}" ] && ! cmp -s "${TMP}/derp.yaml" "${target}"; then
+        warn "keeping existing ${target}; DERP_* settings only seed a new map"
+    fi
 }
 
 keep_state() {
@@ -348,42 +375,57 @@ verify_checksum() {
 fetch_package() {
     [ "${TB_OFFLINE}" != 1 ] || return 0
     if [ "${ROLE}" = control ]; then
+        # Repair a guard left by an installer killed before cleanup
+        if grep -qs 'tailbridge-install' "${POLICY_RC}"; then release_policy_guard; fi
         if command -v headscale >/dev/null 2>&1 && [ "$(headscale version 2>/dev/null | sed -n '1p')" = "headscale version v${HEADSCALE_VERSION}" ]; then return; fi
         download "${HEADSCALE_URL}/${HEADSCALE_FILE}" "${TMP}/${HEADSCALE_FILE}"
         download "${HEADSCALE_URL}/checksums.txt" "${TMP}/checksums.txt"
         checksum=$(awk -v file="${HEADSCALE_FILE}" '$2 == file || $2 == "*" file {print $1}' "${TMP}/checksums.txt")
         verify_checksum "${checksum}" "${TMP}/${HEADSCALE_FILE}"
-        # Defer service startup during package installation; preserve policy-rc.d
-        if [ -e /usr/sbin/policy-rc.d ] || [ -L /usr/sbin/policy-rc.d ]; then mv /usr/sbin/policy-rc.d "${TMP}/policy-rc.d"; fi
+        # Defer only Headscale startup during package installation; other units follow the saved policy
+        if [ -e "${POLICY_RC}" ] || [ -L "${POLICY_RC}" ]; then mv "${POLICY_RC}" "${POLICY_RC}.tailbridge"; fi
         POLICY_GUARD=1
-        printf '#!/usr/bin/env bash\nexit 101\n' > /usr/sbin/policy-rc.d
-        chmod 755 /usr/sbin/policy-rc.d
+        cat > "${POLICY_RC}" <<EOF
+#!/bin/sh
+# tailbridge-install: removed when the installer exits or on its next run
+case "\$1" in headscale|headscale.service) exit 101 ;; esac
+[ ! -x ${POLICY_RC}.tailbridge ] || exec ${POLICY_RC}.tailbridge "\$@"
+exit 0
+EOF
+        chmod 755 "${POLICY_RC}"
         chmod 755 "${TMP}"
         DEBIAN_FRONTEND=noninteractive with_proxy apt-get install -y --no-install-recommends \
             -o Dpkg::Options::=--force-confold "${TMP}/${HEADSCALE_FILE}" >&2 || die 'Headscale package installation failed'
-        rm /usr/sbin/policy-rc.d
-        if [ -e "${TMP}/policy-rc.d" ]; then mv "${TMP}/policy-rc.d" /usr/sbin/policy-rc.d; fi
+        release_policy_guard
         POLICY_GUARD=
         [ "$(headscale version | sed -n '1p')" = "headscale version v${HEADSCALE_VERSION}" ] || die 'installed Headscale version mismatch'
     else
-        if [ -f "${TB_PREFIX}/lib/systemd/system/tailscaled.service" ] && \
-            [ -f "${TB_PREFIX}/etc/default/tailscaled" ] && \
-            command -v tailscale >/dev/null 2>&1 && command -v tailscaled >/dev/null 2>&1 && \
-            [ "$(tailscale version | sed -n '1p')" = "${TAILSCALE_VERSION}" ] && \
-            [ "$(tailscaled --version | sed -n '1p')" = "${TAILSCALE_VERSION}" ]; then return; fi
-        download "${TAILSCALE_URL}" "${TMP}/${TAILSCALE_FILE}"
-        download "${TAILSCALE_URL}.sha256" "${TMP}/tailscale.sha256"
-        verify_checksum "$(cat "${TMP}/tailscale.sha256")" "${TMP}/${TAILSCALE_FILE}"
-        tar -xzf "${TMP}/${TAILSCALE_FILE}" -C "${TMP}" || die 'Tailscale archive extraction failed'
-        package="${TMP}/tailscale_${TAILSCALE_VERSION}_${ARCH}"
-        install -d "${TB_PREFIX}/usr/bin" "${TB_PREFIX}/usr/sbin" "${TB_PREFIX}/lib/systemd/system" "${TB_PREFIX}/etc/default"
-        install -m 755 "${package}/tailscale" "${TB_PREFIX}/usr/bin/tailscale"
-        install -m 755 "${package}/tailscaled" "${TB_PREFIX}/usr/sbin/tailscaled"
-        install -m 644 "${package}/systemd/tailscaled.service" "${TB_PREFIX}/lib/systemd/system/tailscaled.service"
-        if [ ! -e "${TB_PREFIX}/etc/default/tailscaled" ]; then
-            install -m 644 "${package}/systemd/tailscaled.defaults" "${TB_PREFIX}/etc/default/tailscaled"
-        fi
-        [ "$("${TB_PREFIX}/usr/bin/tailscale" version | sed -n '1p')" = "${TAILSCALE_VERSION}" ] || die 'installed Tailscale version mismatch'
+        # shellcheck disable=SC2016
+        installed=$(dpkg-query -W -f='${db:Status-Status} ${Version}' tailscale 2>/dev/null || true)
+        # Keep packages that apt has already upgraded; never downgrade
+        case "${installed}" in
+            "installed "*) dpkg --compare-versions "${installed#installed }" ge "${TAILSCALE_VERSION}" && return ;;
+        esac
+        # The official source is laid out as <distribution>/<codename>
+        # shellcheck disable=SC1091
+        release=$(. "${TB_PREFIX}/etc/os-release" && printf '%s %s' "${ID:-}" "${VERSION_CODENAME:-}")
+        case "${release}" in
+            ubuntu\ [a-z]*|debian\ [a-z]*) ;;
+            *) missing 'Tailscale apt source requires Ubuntu or Debian with VERSION_CODENAME' ;;
+        esac
+        repo="${TAILSCALE_REPO}/${release% *}"
+        codename=${release#* }
+        download "${repo}/${codename}.noarmor.gpg" "${TMP}/tailscale.gpg"
+        verify_checksum "${TAILSCALE_KEYRING_SHA256}" "${TMP}/tailscale.gpg"
+        printf 'deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] %s %s main\n' \
+            "${repo}" "${codename}" > "${TMP}/tailscale.list"
+        install -d "${TB_PREFIX}/usr/share/keyrings" "${TB_PREFIX}/etc/apt/sources.list.d"
+        publish_file 644 "${TMP}/tailscale.gpg" "${TB_PREFIX}/usr/share/keyrings/tailscale-archive-keyring.gpg"
+        publish_file 644 "${TMP}/tailscale.list" "${TB_PREFIX}/etc/apt/sources.list.d/tailscale.list"
+        # Keep local edits to /etc/default/tailscaled when this upgrades the package
+        apt_install -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+            "tailscale=${TAILSCALE_VERSION}"
+        [ "$(tailscale version | sed -n '1p')" = "${TAILSCALE_VERSION}" ] || die 'installed Tailscale version mismatch'
     fi
     PACKAGE_CHANGED=1
 }
@@ -412,10 +454,7 @@ fetch_go() {
     GOTOOLCHAIN=local GOBIN="${TMP}/bin" CGO_ENABLED=0 with_proxy "${GO_BIN}" install \
         "tailscale.com/cmd/derper@v${TAILSCALE_VERSION}" >&2 || die 'derper compilation failed'
     install -d "${TB_PREFIX}/usr/local/bin"
-    STAGED=$(mktemp "${binary}.XXXXXX")
-    install -m 755 "${TMP}/bin/derper" "${STAGED}"
-    mv -f "${STAGED}" "${binary}"
-    STAGED=''
+    publish_file 755 "${TMP}/bin/derper" "${binary}"
     PACKAGE_CHANGED=1
 }
 
@@ -481,9 +520,10 @@ register_node() {
         [ "${state}" = Stopped ] || missing 'existing identity needs explicit reauthentication; state preserved'
         timeout 45 tailscale up > "${TMP}/registration.log" 2>&1 || missing 'existing identity could not resume; state preserved'
     else
-        require_var NODE_AUTHKEY "${NODE_AUTHKEY:-}"
-        printf '%s' "${NODE_AUTHKEY}" > "${TMP}/authkey"
-        set -- --login-server="${SERVER_URL}" --auth-key="file:${TMP}/authkey" --timeout=45s
+        require_authkey
+        authkey=${NODE_AUTHKEY_FILE:-${TMP}/authkey}
+        [ -n "${NODE_AUTHKEY_FILE:-}" ] || printf '%s' "${NODE_AUTHKEY}" > "${authkey}"
+        set -- --login-server="${SERVER_URL}" --auth-key="file:${authkey}" --timeout=45s
         [ -z "${NODE_HOSTNAME:-}" ] || set -- "$@" --hostname="${NODE_HOSTNAME}"
         tailscale up "$@" > "${TMP}/registration.log" 2>&1 || die 'node registration failed'
     fi
@@ -492,23 +532,36 @@ register_node() {
 install_control() {
     keep_state
     for file in config.yaml derp.yaml policy.hujson; do apply_template "${file}"; done
+    for file in tbctl tbctl-backup.service tbctl-backup.timer; do
+        download "${INSTALL_BASE_URL%/}/files/${file}" "${TMP}/${file}"
+    done
     check_overwrite
     fetch_package
+    # tbctl needs YAML parsing to validate DERP maps
+    if [ "${TB_OFFLINE}" != 1 ] && ! python3 -c 'import yaml' >/dev/null 2>&1; then
+        apt_install python3 python3-yaml
+    fi
     install -d -m 755 "${TB_PREFIX}/etc/headscale"
     backup_configuration /etc/headscale/config.yaml /etc/headscale/derp.yaml /etc/headscale/policy.hujson
     for file in config.yaml derp.yaml policy.hujson; do
         target="${TB_PREFIX}/etc/headscale/${file}"
-        if ! cmp -s "${TMP}/${file}" "${target}"; then
-            STAGED=$(mktemp "${target}.XXXXXX")
-            install -m 644 "${TMP}/${file}" "${STAGED}"
-            mv -f "${STAGED}" "${target}"
-            STAGED=''
+        if [ "${file}" = config.yaml ] && ! cmp -s "${TMP}/${file}" "${target}" || [ ! -e "${target}" ]; then
+            publish_file 644 "${TMP}/${file}" "${target}"
             CHANGED=1
         fi
     done
     validate_control
     CONFIG_PENDING=0
+    install -d "${TB_PREFIX}/usr/local/sbin" "${TB_PREFIX}/etc/systemd/system"
+    publish_file 755 "${TMP}/tbctl" "${TB_PREFIX}/usr/local/sbin/tbctl"
+    for file in tbctl-backup.service tbctl-backup.timer; do
+        publish_file 644 "${TMP}/${file}" "${TB_PREFIX}/etc/systemd/system/${file}"
+    done
+    if [ "${TB_OFFLINE}" != 1 ]; then
+        install -d -o headscale -g headscale -m 700 "${TB_PREFIX}/var/backups/headscale"
+    fi
     enable_unit headscale
+    enable_unit tbctl-backup.timer
 }
 install_derp() {
     apply_template derper.conf
@@ -561,10 +614,7 @@ install_derp() {
     for file in ${CONFIG_FILES}; do
         target="${TB_PREFIX}${file}"
         if ! cmp -s "${TMP}/${file##*/}" "${target}"; then
-            STAGED=$(mktemp "${target}.XXXXXX")
-            install -m 644 "${TMP}/${file##*/}" "${STAGED}"
-            mv -f "${STAGED}" "${target}"
-            STAGED=''
+            publish_file 644 "${TMP}/${file##*/}" "${target}"
             CHANGED=1
         fi
     done
@@ -583,10 +633,7 @@ configure_forwarding() {
     fi
     if ! cmp -s "${TMP}/exit-node.conf" "${target}"; then
         install -d -m 755 "${TB_PREFIX}/etc/sysctl.d"
-        STAGED=$(mktemp "${target}.XXXXXX")
-        install -m 644 "${TMP}/exit-node.conf" "${STAGED}"
-        mv -f "${STAGED}" "${target}"
-        STAGED=''
+        publish_file 644 "${TMP}/exit-node.conf" "${target}"
     fi
     [ "${TB_OFFLINE}" != 1 ] || return 0
     install_tool sysctl procps
@@ -598,10 +645,18 @@ configure_forwarding() {
         fi
     done
 }
+require_authkey() {
+    if [ -n "${NODE_AUTHKEY_FILE:-}" ]; then
+        [ -f "${NODE_AUTHKEY_FILE}" ] && [ -s "${NODE_AUTHKEY_FILE}" ] ||
+            missing 'NODE_AUTHKEY_FILE must be a nonempty file'
+    else
+        require_var 'NODE_AUTHKEY_FILE or NODE_AUTHKEY' "${NODE_AUTHKEY:-}"
+    fi
+}
 install_node() {
     keep_state
     if [ "${HAD_STATE}" = 0 ] && [ "${TB_OFFLINE}" != 1 ] && [ -d "${TB_PREFIX}/run/systemd/system" ]; then
-        require_var NODE_AUTHKEY "${NODE_AUTHKEY:-}"
+        require_authkey
     fi
     configure_forwarding
     fetch_package

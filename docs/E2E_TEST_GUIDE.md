@@ -1,6 +1,6 @@
 # 本机体验与 E2E
 
-Compose 创建 Ubuntu 26.04 控制容器和三个独立节点容器；其中两个发起访问，`client-server` 提供 SSH 和按需出口。`probe` 返回普通 Docker 网络请求的来源 IP，`httpbin` 返回模拟外网请求的来源 IP。节点名称不代表真实操作系统或地理位置；这些设施不随服务器部署。
+Compose 默认基于 Ubuntu 26.04 创建控制容器和三个独立节点容器；其中两个发起访问，`client-server` 提供 SSH 和按需出口。`probe` 返回普通 Docker 网络请求的来源 IP，`httpbin` 返回模拟外网请求的来源 IP。节点名称不代表真实操作系统或地理位置；这些设施不随服务器部署。
 
 ## 快速开始
 
@@ -19,21 +19,27 @@ WebUI 入口为 <http://127.0.0.1:3000/admin>，登录密钥位于 `local/e2e/ge
 
 ## GitHub Actions
 
-[CI](https://github.com/chinayin/tailbridge/actions/workflows/ci.yml) 在 main 推送和 PR 时运行 `make test`、`make lint`。在 Actions 中选择 **Run workflow**，勾选 **Run full network and systemd E2E**，会额外创建全新测试环境，执行完整网络及三个角色的 systemd 验收。
+[CI](https://github.com/chinayin/tailbridge/actions/workflows/ci.yml) 在 main 推送和 PR 时运行 `make test`、`make lint`。[E2E](https://github.com/chinayin/tailbridge/actions/workflows/e2e.yml) 只手动触发：在 **Run workflow** 中选择基础镜像（`ubuntu:26.04`、`ubuntu:26.10` 或 `debian:13`），在 amd64 和 arm64 原生 runner 上分别创建全新测试环境，执行完整网络及三个角色的 systemd 验收。
 
-测试环境不需要仓库密钥。E2E 报告作为 `e2e-reports` 保留 7 天，仅上传报告文件，不包含配置、证书或身份目录；结束时停止测试环境。
+测试环境不需要仓库密钥。E2E 报告按架构作为 `e2e-reports-amd64` / `e2e-reports-arm64` 保留 7 天，仅上传报告文件，不包含配置、证书或身份目录；结束时停止测试环境。
 
 ## 部署和测试的关系
 
-`compose.yaml` 是完整静态编排。Ubuntu 镜像只安装系统工具，`start.sh` 调用根目录 `install.sh` 安装组件。`installer-files` 提供安装器和 `files/` 模板，配置在目标容器替换并校验。本机 `e2e.py` 准备测试证书、SSH 凭据和可选 UI 配置。
+`compose.yaml` 是完整静态编排。运行镜像只安装系统工具，由 `e2e.py` 经 stdin 传入 Dockerfile 构建，不发送构建上下文，`local/` 中的凭据不会到达 Docker daemon；`start.sh` 调用根目录 `install.sh` 安装组件。`installer-files` 提供安装器和 `files/` 模板，配置在目标容器替换并校验。本机 `e2e.py` 准备测试证书、SSH 凭据和可选 UI 配置。
 
-容器直接运行 `headscale serve`、`derper`、`tailscaled` 和 SSH 服务，由 Compose 管理生命周期，不启动 systemd。DERP 入口先复制只读证书，再执行安装器，读取生成的 [DERP 配置](INSTALL.md#配置持久化)，以 `derper` 用户启动。已有 control 容器重启直接复用配置；`make e2e-up` 重建 control 并重新应用安装模板。
+容器直接运行 `headscale serve`、`derper`、`tailscaled` 和 SSH 服务，由 Compose 管理生命周期，不启动 systemd。DERP 入口先复制只读证书，再执行安装器，读取生成的 [DERP 配置](INSTALL.md#配置持久化)，并执行已安装 `derper.service` 中的同一 `ExecStart`，以 `derper` 用户启动。已有 control 容器重启直接复用配置；`make e2e-up` 先用安装器 `--dry-run` 校验输入，再删除测试的策略和 Map，重建 control 并按当前配置重新初始化。
 
 E2E 从 `derp_map` 提取地域、节点名和端点，作为 `DERP_*` 环境变量传给 control，由安装器渲染共享模板。修改环境配置后执行 `make e2e-up`；单独 `docker restart` 不会更新环境变量。
 
 Docker 的 `/proc/sys` 只读，出口的内核转发由 Compose `sysctls` 预先开启；安装器写入持久配置并确认内核值，`node.sh` 在注册后宣告出口。E2E 同时检查普通节点没有收到出口配置；容器测试不替代原生主机重启后的持久化验证。
 
-默认组件版本来自 [`install.sh`](../install.sh)。`e2e.py` 接收同名 `--headscale-version`、`--tailscale-version` 参数并传给容器中的安装器。control 在运行时校验并安装官方 DEB，node 安装官方静态包和服务文件，derper 使用脚本内固定的 Go 版本编译。UI、探针及 HTTP 测试工具的镜像版本单独固定在 Compose 中。
+容器基础镜像默认 `ubuntu:26.04`，兼容平台用 `TB_BASE_IMAGE` 验证，例如 `TB_BASE_IMAGE=debian:13` 或 `ubuntu:26.10`。基础检查会核对容器的发行版与版本和该变量一致。镜像标签按基础镜像区分，切换平台不会覆盖另一平台的镜像；状态卷按 Compose 项目区分，需要独立状态时使用独立实例：先把示例复制到 `local/e2e-debian/environment.yaml`，修改 `project`、`webui_port` 和出口子网（见[配置和状态](#配置和状态)），再运行：
+
+```bash
+TB_BASE_IMAGE=debian:13 TB_CONFIG=local/e2e-debian/environment.yaml make e2e-bootstrap e2e-test e2e-systemd
+```
+
+默认组件版本来自 [`install.sh`](../install.sh)。`e2e.py` 接收同名 `--headscale-version`、`--tailscale-version` 参数并传给容器中的安装器。control 在运行时校验并安装官方 DEB，node 从 Tailscale 官方 apt 源安装，derper 使用脚本内固定的 Go 版本编译。UI、探针及 HTTP 测试工具的镜像版本单独固定在 Compose 中。
 
 首次启动依赖上游下载速度，控制面、节点和中继的安装就绪等待各有 30 分钟上限；普通 CLI 查询与节点注册仍使用短超时。安装进度可查看相应容器日志。
 
@@ -41,7 +47,7 @@ Docker 的 `/proc/sys` 只读，出口的内核转发由 Compose `sysctls` 预�
 
 service 网络允许访问官方发布站点以完成安装，不发布控制面、中继或客户端的宿主端口；出口测试的 egress 链路仍为内部双栈网络。当前拓扑只测试一个区域，ID、代码、显示名和节点名均可配置。Compose 服务名 `derp-main` 只标识测试容器及其状态卷，与 Map 节点名无关。
 
-初始策略拒绝设备互访。E2E 的 control 安装明确带 `--force` 重置测试策略；SSH、DERP 就绪且拒绝策略到达节点后，先验证未授权 SSH 失败，再根据真实尾网地址放行测试互访，仅授权 `client-a` 使用互联网出口。测试策略通过 stdin 传到控制面，由容器内的 `publish_policy.py` 原子发布并交给 Headscale 校验，避免宿主机共享文件视图的同步延迟。`client-b` 为出口拒绝对照。首次注册使用固定测试用户 `e2e`，已有有效身份忽略 authkey；失效身份保留并报错，由操作层显式重新认证。注册凭据只在 `--bootstrap` 时临时挂载，随后移除。
+初始策略拒绝设备互访。`make e2e-up` 每次重新初始化测试策略；SSH、DERP 就绪且拒绝策略到达节点后，先验证未授权 SSH 失败，再根据真实尾网地址放行测试互访，仅授权 `client-a` 使用互联网出口。测试策略通过 stdin 交给容器内与生产相同的 `tbctl publish policy`，校验、原子发布并重载，避免宿主机共享文件视图的同步延迟。`client-b` 为出口拒绝对照。首次注册使用固定测试用户 `e2e`，已有有效身份忽略 authkey；失效身份保留并报错，由操作层显式重新认证。注册凭据只在 `--bootstrap` 时临时挂载，随后移除。
 
 ## 配置和状态
 
@@ -73,7 +79,7 @@ make e2e-status
 make e2e-down          # 保留卷、配置与凭据
 ```
 
-完整检查包括 IP / 完整域名 / 短名 SSH、直连、强制 DERP、停止中继的失败反例、恢复、从运行 / 停用状态重启后的身份和已保存名称保持，以及停止 UI 后核心通信。另临时修改地域显示名，验证定时下发、控制面重启保留配置与身份，最后恢复原 Map。出口检查覆盖 IPv4 / IPv6 HTTP、无权限反例、出口暂停恢复和经 DERP 转发。停止中继期间控制面继续运行，故障清理失败会报错。首次安装与默认拒绝证据单独写入 `generated/install-results.json`。
+完整检查包括 IP / 完整域名 / 短名 SSH、直连、强制 DERP、停止中继的失败反例、恢复、从运行 / 停用状态重启后的身份和已保存名称保持，以及停止 UI 后核心通信。另用 `tbctl publish derp` 临时修改地域显示名，验证定时下发、控制面重启保留配置与身份，最后恢复原 Map。出口检查覆盖 IPv4 / IPv6 HTTP、无权限反例、出口暂停恢复和经 DERP 转发。停止中继期间控制面继续运行，故障清理失败会报错。首次安装与默认拒绝证据单独写入 `generated/install-results.json`。
 
 `make e2e-basic` 与 `make e2e-test` 还验证 [REST 管理](API.md)：使用临时 API Key、用户、注册密钥和独立 userspace 节点，测试真实注册、改名、到期、双栈路由批准／撤销与删除。测试完成或失败时清理临时资源并撤销 API Key，核对既有节点与路由不变；不使用或轮换 UI 的 API Key。
 
@@ -82,7 +88,7 @@ make e2e-down          # 保留卷、配置与凭据
 `make e2e-systemd` 在临时特权容器中以 systemd 为 PID 1，分别验收 DERP 和 control + node：
 
 - DERP：非 root 运行、TLS / STUN、配置与证书保护、代理下载、仅修改 conf 后重启生效、异常恢复和容器重启自启。使用已运行 E2E 中继的程序，不复制身份；此容器无外部网络。
-- control / node：首次安装官方包及服务文件，通过本地可信 TLS 完成真实注册；验证重跑幂等、控制入口校验、出口开关及重启持久化、其他子网路由保留、停用与异常恢复、容器重启自启和身份保持。容器可出站下载官方包，通过 `TB_INSTALL_PROXY` 支持代理。
+- control / node：首次安装官方包及服务文件，node 从官方 apt 源安装并用 `NODE_AUTHKEY_FILE` 通过本地可信 TLS 完成真实注册；验证备份定时器生成快照、重跑幂等、发布策略后重跑 control 不覆盖策略、控制入口校验、出口开关及重启持久化、其他子网路由保留、停用与异常恢复、容器重启自启和身份保持。容器可出站下载官方包，通过 `TB_INSTALL_PROXY` 支持代理。
 
 两项均不共享状态卷或发布宿主端口，结束后删除测试容器及其临时身份。只测 DERP 可运行 `make e2e-derp-service`；其他实例使用 `TB_CONFIG=local/<实例>/environment.yaml make e2e-systemd`。这验证容器中的服务生命周期，真实主机重启与公网链路仍须另行验收；完整转发用上述网络测试。
 

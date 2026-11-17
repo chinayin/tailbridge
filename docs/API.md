@@ -58,7 +58,7 @@ jq -er '.preAuthKey.key' preauthkey.json > node-auth.key
 TB_KEY_ID=$(jq -er '.preAuthKey.id' preauthkey.json)
 ```
 
-每台新设备签发一个单次使用的 key，安全传给[节点安装流程](INSTALL.md#node-设备)的 `NODE_AUTHKEY`，注册后删除本地密钥文件。密钥到期不撤销已经建立的节点身份，也不授予设备互访权限。
+每台新设备签发一个单次使用的 key，通过已有安全通道把 `node-auth.key` 传到待安装节点，作为[节点安装流程](INSTALL.md#node-设备)的 `NODE_AUTHKEY_FILE`；注册后两端都删除该文件。密钥到期不撤销已经建立的节点身份，也不授予设备互访权限。
 
 ```bash
 api /preauthkey | jq '.preAuthKeys[] | {id,user:.user.name,used,expiration}'

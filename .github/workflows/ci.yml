@@ -4,12 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      e2e:
-        description: Run full network and systemd E2E
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -40,46 +34,3 @@ jobs:
         run: make lint
       - name: Offline tests
         run: make test
-
-  e2e:
-    name: Network and systemd E2E
-    if: github.event_name == 'workflow_dispatch' && inputs.e2e
-    needs: checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.13'
-      - name: Install test dependencies
-        run: make setup
-      - name: Install and register test devices
-        id: bootstrap
-        run: make e2e-bootstrap
-      - name: Start optional management UI
-        run: make e2e-ui
-      - name: Full network E2E
-        run: make e2e-test
-      - name: Systemd E2E
-        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
-        run: make e2e-systemd
-      - name: Diagnose failed services
-        if: failure()
-        run: local/.venv/bin/python tests/e2e/e2e.py compose logs --no-color --tail 100
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-reports
-          path: |
-            local/e2e/generated/install-results.json
-            local/e2e/generated/results.json
-            local/e2e/generated/results.html
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Stop test environment
-        if: always()
-        run: make e2e-down

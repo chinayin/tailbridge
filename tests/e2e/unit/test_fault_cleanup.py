@@ -170,8 +170,8 @@ class FaultCleanupTests(unittest.TestCase):
                         raise RuntimeError('control is stopped')
                     if args[0] == 'cat':
                         output = path.read_text()
-                    elif args[0] == 'python3':
-                        execute([verify.sys.executable, '-c', args[2], str(path), args[4]])
+                    elif args[:3] == ('tbctl', 'publish', 'derp'):
+                        path.write_text(kwargs['input'])
                         stopped = True
                         raise RuntimeError('control stopped after Map write')
                     else:

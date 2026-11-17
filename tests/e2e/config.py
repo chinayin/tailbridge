@@ -83,24 +83,15 @@ def validate_derp_map(derp_map, base_domain, server_host):
     regions = derp_map["regions"]
     if not isinstance(regions, dict) or not regions:
         raise ValueError("At least one DERP region is required")
-    codes, names, hosts = set(), set(), {server_host}
+    # Region and node values are validated by the installer dry run in e2e.py
+    hosts = {server_host}
     for region_id, region in regions.items():
-        if type(region_id) is not int or not 1 <= region_id <= 65535:
-            raise ValueError("DERP region IDs must be integers between 1 and 65535")
+        if type(region_id) is not int:
+            raise ValueError("DERP region IDs must be integers")
         if (not isinstance(region, dict)
                 or set(region) != {"regionid", "regioncode", "regionname", "nodes"}
-                or type(region["regionid"]) is not int or region["regionid"] != region_id):
+                or region["regionid"] != region_id):
             raise ValueError("DERP region fields or regionid are invalid")
-        code = region["regioncode"]
-        if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", code) or code in codes:
-            raise ValueError("DERP region codes must be unique lowercase labels")
-        codes.add(code)
-        if not isinstance(region["regionname"], str) or not region["regionname"].strip():
-            raise ValueError("DERP regionname must be nonempty")
-        label = region["regionname"]
-        if (any(token in label for token in ('|', '&', '\\', '"', "'", '${'))
-                or any(ord(char) < 32 or ord(char) == 127 for char in label)):
-            raise ValueError("DERP regionname contains characters unsafe for installer templates")
         nodes = region["nodes"]
         if not isinstance(nodes, list) or len(nodes) != 1:
             raise ValueError("Use one node per region; same-region mesh is not configured")
@@ -109,11 +100,7 @@ def validate_derp_map(derp_map, base_domain, server_host):
         if (not isinstance(node, dict) or not required <= set(node)
                 or set(node) - required - {"ipv4"}):
             raise ValueError("DERP node fields are invalid")
-        name = node["name"]
-        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", name) or name in names:
-            raise ValueError("DERP node names must be unique lowercase labels")
-        names.add(name)
-        if type(node["regionid"]) is not int or node["regionid"] != region_id:
+        if node["regionid"] != region_id:
             raise ValueError("DERP node regionid must match its region")
         host = node["hostname"]
         validate_endpoint(host, base_domain)
@@ -127,9 +114,8 @@ def validate_derp_map(derp_map, base_domain, server_host):
                 raise ValueError("DERP ipv4 must be globally routable") from error
             if not isinstance(node["ipv4"], str) or not ip.is_global or ip.is_multicast:
                 raise ValueError("DERP ipv4 must be globally routable")
-        for field in ("derpport", "stunport"):
-            if type(node[field]) is not int or not 1 <= node[field] <= 65535:
-                raise ValueError(f"DERP {field} must be an integer between 1 and 65535")
+        if node["stunport"] != 3478:
+            raise ValueError("stunport must be 3478: the installer template fixes the STUN port")
         if node["canport80"] is not False:
             raise ValueError("canport80 must be false: this deployment disables the HTTP listener")
 

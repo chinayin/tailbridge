@@ -54,8 +54,8 @@ regions:
 ## 创建与维护
 
 1. 普通节点传入控制地址和首次注册凭据即可；仅需指定名称时传 `NODE_HOSTNAME`，见[安装与配置](INSTALL.md#node-设备)。以 Headscale 中的最终设备名为准。
-2. 新增中继先检查名称和 ID 冲突，再修改控制面的 Map，发布步骤见[运维](OPERATIONS.md#中继与访问策略)。不要用 `control --force` 覆盖已有多区域 Map。
+2. 新增中继先检查名称和 ID 冲突，再修改控制面的 Map，用 `tbctl publish derp` 发布，见[运维](OPERATIONS.md#中继与访问策略)。重跑 control 不会改动已有 Map。
 3. 设备改名用 `tailscale set --hostname=<新名称>`，必要时再执行 `headscale nodes rename <新名称> --identifier <节点ID>`；保留状态，无需重新注册。[Tailscale](https://tailscale.com/docs/concepts/machine-names) · [Headscale](https://github.com/juanfont/headscale/blob/v0.29.7/cmd/headscale/cli/nodes.go)
 4. DERP 只改名称时保留区域 ID；跨地域迁移或新旧并行时分配新 ID，确认客户端切换后再退役旧中继。
 
-首次安装通过 control 的地域和节点名称 ENV 初始化 Map，见[安装说明](INSTALL.md#control-控制面)。这些名称不会修改已注册设备的名称。
+首次安装通过 control 的地域和节点名称 ENV 初始化 Map；之后这些 ENV 不再生效，见[安装说明](INSTALL.md#control-控制面)。这些名称不会修改已注册设备的名称。

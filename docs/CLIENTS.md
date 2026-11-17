@@ -6,7 +6,7 @@
 
 - **macOS 图形版**：安装并打开 [Tailscale 官方独立版](https://tailscale.com/docs/install/mac)（Homebrew 对应 `tailscale-app`），允许添加 VPN；在 **Settings → CLI integration → Show me how → Install Now** 启用命令行。[CLI 说明](https://tailscale.com/docs/reference/tailscale-cli?tab=macos)
 - **macOS Homebrew 命令行版**：`brew install tailscale` 安装后，执行一次 `sudo brew services start tailscale` 启动服务并设为开机启动。[官方说明](https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS#installing-tailscaled-from-homebrew)
-- **Linux**：Ubuntu 26.04 可按[节点安装](INSTALL.md#安装与检查)完成安装和注册；其他发行版使用 [Tailscale 官方安装方式](https://tailscale.com/download/linux)。
+- **Linux**：Ubuntu 26.04 / 26.10、Debian 13 可按[节点安装](INSTALL.md#安装与检查)完成安装和注册；其他发行版使用 [Tailscale 官方安装方式](https://tailscale.com/download/linux)。
 
 尚未接入时，替换控制面 URL 后执行。本文的 `tailscale` 命令在 Mac 图形版无需 `sudo`；Homebrew 命令行版和 Linux 按权限加 `sudo`：
 

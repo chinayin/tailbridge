@@ -13,10 +13,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL_URL = 'https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh'
 SERVER = {'SERVER_URL': 'https://tailbridge.example.net'}
-NODE = {**SERVER, 'NODE_AUTHKEY': '<首次注册密钥>'}
+NODE = {**SERVER, 'NODE_AUTHKEY_FILE': './node-auth.key'}
 EXAMPLES = {
-    ('README.md', 0): (['--role', 'node'], {**SERVER, 'NODE_AUTHKEY': '<node-auth-key>'}),
-    ('README.zh-CN.md', 0): (['--role', 'node'], {**SERVER, 'NODE_AUTHKEY': '<node-auth-key>'}),
+    ('README.md', 0): (['--role', 'node'], NODE),
+    ('README.zh-CN.md', 0): (['--role', 'node'], NODE),
     ('docs/INSTALL.md', 0): (['--help'], {}),
     ('docs/INSTALL.md', 1): (['--role', 'node'], {**NODE, 'PROXY': 'http://127.0.0.1:7890'}),
     ('docs/INSTALL.md', 2): (['--role', 'control', '--dry-run'], {
