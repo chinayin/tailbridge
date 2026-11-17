@@ -14,6 +14,7 @@ HOSTNAME = "control.systemd.test"
 SERVER_URL = f"https://{HOSTNAME}"
 CERT = "/etc/headscale/certs/control.crt"
 KEY = "/etc/headscale/certs/control.key"
+CA = "/root/tailbridge-ca.crt"
 NODE_NAME = "systemd-node"
 
 
@@ -26,11 +27,16 @@ class ControlNodeTest(SystemdTest):
         self.boot()
         self.exec("bash", "-c", "! command -v headscale && ! command -v tailscaled")
         self.exec("install", "-d", "-m", "755", "/etc/headscale/certs")
+        # 独立测试 CA 签发服务证书：OpenSSL 4 下的 curl 拒绝把 CA 证书当作服务证书
         self.exec("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
-                  "-subj", f"/CN={HOSTNAME}", "-addext", f"subjectAltName=DNS:{HOSTNAME}",
-                  "-addext", "basicConstraints=critical,CA:TRUE",
-                  "-addext", "extendedKeyUsage=serverAuth", "-keyout", KEY, "-out", CERT)
-        self.exec("install", "-m", "644", CERT, "/usr/local/share/ca-certificates/tailbridge-test.crt")
+                  "-subj", "/CN=tailbridge-systemd-ca", "-addext", "basicConstraints=critical,CA:TRUE",
+                  "-addext", "keyUsage=critical,keyCertSign,cRLSign", "-keyout", "/root/ca.key", "-out", CA)
+        self.exec("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", f"/CN={HOSTNAME}",
+                  "-keyout", KEY, "-out", "/root/control.csr")
+        self.exec("sh", "-c", f"printf 'subjectAltName=DNS:{HOSTNAME}\\nextendedKeyUsage=serverAuth\\n' > /root/control.ext")
+        self.exec("openssl", "x509", "-req", "-in", "/root/control.csr", "-CA", CA, "-CAkey", "/root/ca.key",
+                  "-CAcreateserial", "-days", "2", "-extfile", "/root/control.ext", "-out", CERT)
+        self.exec("install", "-m", "644", CA, "/usr/local/share/ca-certificates/tailbridge-test.crt")
         self.exec("update-ca-certificates")
         self.templates()
 
