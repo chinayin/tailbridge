@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -109,9 +110,11 @@ class ControlToolTests(unittest.TestCase):
         leftover = self.tool.BACKUPS / '.interrupted'
         for path in (old, recent, leftover):
             path.mkdir()
+        previous = os.umask(0o022)
         try:
             self.tool.backup(now)
         finally:
+            os.umask(previous)
             database.close()
         snapshot = self.tool.BACKUPS / now.strftime(self.tool.STAMP)
         self.assertEqual(sorted(p.name for p in self.tool.BACKUPS.iterdir()), sorted([recent.name, snapshot.name]))
@@ -122,6 +125,7 @@ class ControlToolTests(unittest.TestCase):
             copied.close()
         self.assertEqual(sorted(p.name for p in snapshot.iterdir()),
                          ['config.yaml', 'db.sqlite', 'derp.yaml', 'noise_private.key', 'policy.hujson'])
+        self.assertEqual((snapshot / 'db.sqlite').stat().st_mode & 0o777, 0o600)
 
 
 if __name__ == '__main__':
