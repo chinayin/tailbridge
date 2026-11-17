@@ -55,6 +55,7 @@ Detailed guides are currently in Chinese.
 - [Architecture and design decisions](docs/ARCHITECTURE.md)
 - [Node naming](docs/NODE_NAMING.md)
 - [Operations](docs/OPERATIONS.md)
+- [Deployment skill](skills/tailbridge-deploy/SKILL.md): create cloud hosts (AWS Lightsail by default), deploy and add relay regions
 - [Local setup and E2E testing](docs/E2E_TEST_GUIDE.md)
 
 ## License

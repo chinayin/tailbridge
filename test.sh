@@ -8,4 +8,7 @@ if LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "${DIR}/install.sh" "${DIR
     echo 'Error: use braces before non-ASCII characters in variable expansions' >&2
     exit 1
 fi
-"${TB_PYTHON}" -m unittest discover -s "${DIR}/tests/install" -p 'test_*.py' -v
+status=0
+"${TB_PYTHON}" -m unittest discover -s "${DIR}/tests/install" -p 'test_*.py' -v || status=1
+"${TB_PYTHON}" -m unittest discover -s "${DIR}/skills/tailbridge-deploy/tests" -p 'test_*.py' -v || status=1
+exit "${status}"

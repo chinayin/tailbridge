@@ -53,6 +53,7 @@ Mac / Linux 的接入、日常使用、出口切换和连通性测试见[客户�
 - [架构与设计决策](docs/ARCHITECTURE.md)
 - [节点命名](docs/NODE_NAMING.md)
 - [运维](docs/OPERATIONS.md)
+- [部署 skill](skills/tailbridge-deploy/SKILL.md)：创建云主机（默认 AWS Lightsail）、部署和新增中继区域
 - [本机体验与 E2E](docs/E2E_TEST_GUIDE.md)
 
 ## 开源协议
