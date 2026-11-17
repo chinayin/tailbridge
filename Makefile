@@ -17,7 +17,7 @@ test: ## Run offline regression tests
 	TB_PYTHON=$(PYTHON) bash tests/e2e/test.sh
 
 lint: ## Check Python and shell syntax (requires shellcheck)
-	$(PYTHON) -c 'import ast,pathlib; [ast.parse(p.read_text(), filename=str(p)) for p in pathlib.Path("tests").rglob("*.py")]'
+	$(PYTHON) -c 'import ast,pathlib; [ast.parse(p.read_text(), filename=str(p)) for d in ("tests", "skills") for p in pathlib.Path(d).rglob("*.py")]'
 	shellcheck install.sh test.sh tests/e2e/test.sh tests/e2e/start.sh tests/e2e/node.sh tests/e2e/httpbin-network.sh
 
 e2e-init: ## Create local E2E inputs if absent

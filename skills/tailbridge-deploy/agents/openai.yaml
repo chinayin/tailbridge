@@ -1,0 +1,4 @@
+interface:
+  display_name: "TailBridge Deploy"
+  short_description: "Create hosts, deploy TailBridge relays and register devices"
+  default_prompt: "Use $tailbridge-deploy to create a host and deploy TailBridge, add a DERP region, or register a client against an existing control plane, then verify the requested result."

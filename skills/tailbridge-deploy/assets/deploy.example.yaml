@@ -1,0 +1,45 @@
+# One host's deployment input. Copy to ignored local/, one file per host,
+# e.g. local/deploy-<machine>.yaml. The assistant reads it; install.sh receives
+# environment variables. Never commit real values.
+
+# Roles installed on this host: control, derp, or both on a shared host
+roles: [control, derp]
+
+# Only needed when the skill creates or changes the cloud host
+host:
+  provider: lightsail # lightsail (default) or ec2
+  profile: default
+  region: ""
+  name: "" # Machine name from docs/NODE_NAMING.md
+  plan: "" # Lightsail bundle or EC2 instance type: the smallest that fits the roles
+  ssh_source_cidrs: [] # Administrator egress addresses allowed to reach SSH
+
+ssh:
+  host: ""
+  user: "" # Lightsail Debian 13: admin; EC2 Ubuntu: ubuntu
+  private_key_file: ""
+
+common:
+  SERVER_URL: ""
+
+# Used by the DNS-01 certificate workflow, not exported to install.sh
+acme:
+  email: ""
+  cert_name: "" # Certbot lineage on this host, normally the machine name
+  cloudflare_credentials_file: local/cloudflare.ini
+
+# Role control
+control:
+  BASE_DOMAIN: ""
+  TLS_CERT_PATH: /etc/headscale/certs/fullchain.pem
+  TLS_KEY_PATH: /etc/headscale/certs/privkey.pem
+
+# Role derp listener settings; the region fields also seed or extend the Map
+derp:
+  DERP_REGION_ID: null # Allocate using the current Map and naming rules
+  DERP_REGION_CODE: ""
+  DERP_REGION_NAME: ""
+  DERP_NODE_NAME: ""
+  DERP_HOSTNAME: ""
+  DERP_PORT: 443 # 8443 when sharing the control host's IP
+  DERP_CERT_DIR: /etc/derper/certs

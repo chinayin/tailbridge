@@ -41,6 +41,7 @@ flowchart LR
 | 内容 | 位置 |
 | --- | --- |
 | 安装器 / 模板与工具 | `install.sh` / `files/` |
+| 云主机创建与部署 skill | `skills/tailbridge-deploy/`：AWS 默认 Lightsail（Debian 13），需要 Ubuntu 26.04 等情况用 EC2；部署输入按主机放在 `local/` |
 | E2E 编排与测试 | `tests/e2e/` |
 | 本机环境、凭据、报告与私有笔记 | 忽略的 `local/` |
 | 控制面配置 / 状态 / 备份 | `/etc/headscale/` / `/var/lib/headscale/` / `/var/backups/headscale/` |
