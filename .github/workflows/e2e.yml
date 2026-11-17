@@ -9,8 +9,12 @@ on:
       image:
         description: Base image
         type: choice
-        options: [ubuntu:26.04, ubuntu:26.10, debian:13]
-        default: ubuntu:26.04
+        # 加引号：部分 YAML 解析器会把流式序列中的 a:b 当成键值对
+        options:
+          - 'ubuntu:26.04'
+          - 'ubuntu:26.10'
+          - 'debian:13'
+        default: 'ubuntu:26.04'
 
 permissions:
   contents: read
