@@ -11,7 +11,7 @@ host:
   profile: default
   region: ""
   name: "" # Machine name from docs/NODE_NAMING.md
-  description: "" # Description tag, e.g. "TailBridge derp: DERP 911 Hong Kong"
+  description: "" # Description tag, e.g. "TailBridge derp: DERP 910 Hong Kong"
   plan: "" # Lightsail bundle or EC2 instance type: the smallest that fits the roles
   ssh_source_cidrs: [] # Administrator egress addresses allowed to reach SSH
 

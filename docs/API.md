@@ -47,8 +47,9 @@ api /auth/register -X POST \
 先查询用户；已存在时直接使用其 ID，否则创建：
 
 ```bash
-api '/user?name=alice'
-TB_USER_ID=$(api /user -X POST --data '{"name":"alice"}' | jq -er '.user.id')
+# Reuse the existing user's ID, or create the user
+TB_USER_ID=$(api '/user?name=alice' | jq -er '.users[0].id') ||
+  TB_USER_ID=$(api /user -X POST --data '{"name":"alice"}' | jq -er '.user.id')
 TB_EXPIRATION=$(jq -nr 'now + 3600 | todateiso8601')
 umask 077
 api /preauthkey -X POST --data "$(jq -nc \

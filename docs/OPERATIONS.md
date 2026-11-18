@@ -1,6 +1,6 @@
 # TailBridge 运维
 
-以下面向 Ubuntu 原生部署。本机环境操作与验证范围见 [E2E 说明](E2E_TEST_GUIDE.md)。
+以下面向原生主机部署，支持的平台见[安装与配置](INSTALL.md)。本机环境操作与验证范围见 [E2E 说明](E2E_TEST_GUIDE.md)。
 
 ## 服务与证书
 
@@ -40,7 +40,7 @@ sudo ls /var/backups/headscale/
 
 本机备份只防误操作和升级失败，不防整机丢失；异机副本、TLS 私钥、各中继的 `/etc/derper/` 和 `/var/lib/derper/`、可选 UI 状态仍需另行备份。备份包含私钥，限制访问。
 
-升级 Headscale 时，先执行一次 `sudo tbctl backup`，再用首次安装的相同 ENV 重跑 [control 安装命令](INSTALL.md#安装与检查)并追加 `--headscale-version X.Y.Z`；策略和 Map 保持不变，只有 `config.yaml` 与模板不同时才需要 `--force`。升级前检查目标版本配置并跑 E2E。
+升级 Headscale 时，先执行一次 `sudo tbctl backup`，再用首次安装的相同 ENV 重跑 [control 安装命令](INSTALL.md#安装与检查)并追加 `--headscale-version X.Y.Z`；策略和 Map 保持不变，只有 `config.yaml` 与模板不同时才需要 `--force`，手改项的处理见[配置持久化](INSTALL.md#配置持久化)。升级前检查目标版本配置并跑 E2E。
 
 数据库已迁移时，回退必须恢复升级前的快照及对应旧程序：停止 Headscale，删除 `db.sqlite-wal` / `db.sqlite-shm`，用快照替换 `db.sqlite` 并保持 `headscale` 所有者后再启动。[上游升级说明](https://headscale.net/stable/setup/upgrade/)
 
@@ -52,7 +52,7 @@ sudo ls /var/backups/headscale/
 
 新增中继按 [命名规则](NODE_NAMING.md) 查重和分配 ID。先检查 DNS、TLS、STUN、接入校验，再发布生产 Map，并用真实客户端在生产中验证经该区域的实际转发。Headscale 每分钟重读，成功后下发，客户端用 `tailscale debug derp-map` 确认，无需重启。部署 derper 不会自动注册到 Map。
 
-重读由 `config.yaml` 中的 `derp.auto_update_enabled: true` 和 `derp.update_frequency: 1m` 控制。修改这两个设置须校验并重启 Headscale；定时重读只更新 Map 来源。[上游配置](https://github.com/juanfont/headscale/blob/v0.29.7/config-example.yaml#L130-L135)
+重读由 `config.yaml` 中的 `derp.auto_update_enabled: true` 和 `derp.update_frequency: 1m` 控制。修改这两个设置须校验并重启 Headscale，对升级的影响见[配置持久化](INSTALL.md#配置持久化)；定时重读只更新 Map 来源。[上游配置](https://github.com/juanfont/headscale/blob/v0.29.7/config-example.yaml#L130-L135)
 
 退役时先发布不含旧节点的 Map，确认客户端切换，再停止旧中继。控制面维护会影响中继的新接入校验，应安排维护窗口。
 
@@ -89,6 +89,41 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 按[访问策略流程](#中继与访问策略)用 `tbctl publish policy` 发布。
 
 路由批准与使用授权分别生效，客户端还须主动选择出口，见 [出口切换](#整机出口切换与排查)。[Headscale 路由](https://github.com/juanfont/headscale/blob/v0.29.7/docs/ref/routes.md#exit-node) · [Tailscale 出口](https://tailscale.com/docs/features/exit-nodes)
+
+## 子网路由与内网域名
+
+让尾网设备经某个节点访问它能到达的网段，如办公室内网或 OpenVPN 后的网段。以下步骤未在实际部署中验证。
+
+在能访问目标网段的 Linux 节点上开启转发并宣告，网段替换为实际值；已是出口的节点无需重复开启转发：
+
+```bash
+printf '%s\n' 'net.ipv4.ip_forward=1' 'net.ipv6.conf.all.forwarding=1' |
+  sudo tee /etc/sysctl.d/99-tailscale.conf
+sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+sudo tailscale set --advertise-routes=10.0.0.0/16
+```
+
+按[节点与路由](API.md#节点与路由)批准该网段，该接口替换完整批准列表。再把授权合并进 `grants` 并[发布](#中继与访问策略)：
+
+```json
+{"src": ["alice@"], "dst": ["10.0.0.0/16"], "ip": ["*"]}
+```
+
+Linux 客户端执行 `sudo tailscale set --accept-routes=true`，macOS 默认接收。用 `ip route get 10.0.0.1`（macOS 为 `route -n get`）确认路由进入 Tailscale 接口。
+
+- 目标看到的来源是该节点的地址，回程无需另配路由。
+- 宣告网段不要与接收端的本机网段重叠，如 Docker 默认的 `172.17.0.0/16`。
+
+只在内网 DNS 解析的域名，在 `/etc/headscale/config.yaml` 指定该域的 DNS，DNS 地址须在已宣告的网段内；校验并重启后生效，对升级的影响见[配置持久化](INSTALL.md#配置持久化)：
+
+```yaml
+dns:
+  nameservers:
+    split:
+      team.example: [10.0.0.53]
+```
+
+客户端自己连接 OpenVPN 时不需要子网路由，见[与 OpenVPN 同时使用](CLIENTS.md#与-openvpn-同时使用)。
 
 ## 整机出口切换与排查
 

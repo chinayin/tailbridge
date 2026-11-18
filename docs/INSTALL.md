@@ -39,7 +39,7 @@ curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/mai
     NODE_AUTHKEY_FILE=./node-auth.key bash -s -- --role node
 ```
 
-三个角色均支持 `PROXY=http(s)://[用户:密码@]主机[:端口]`，作用于 curl、apt 和 Go 下载，不写入系统或服务配置。`127.0.0.1` 指执行安装的目标机；容器或远程服务器须使用它能访问的代理地址。
+三个角色均支持 `PROXY=http(s)://[用户:密码@]主机[:端口]`，作用于 curl、apt 和 Go 下载，不写入系统或服务配置。`127.0.0.1` 指执行安装的目标机；容器或远程服务器须使用它能访问的代理地址。中国大陆的机器通常无法稳定访问 GitHub 和 Go 模块源，安装时需设置 `PROXY`；`INSTALL_BASE_URL` 只替换安装器与模板的来源，官方组件仍从原地址下载。此项未在大陆机器实测。
 
 非空 `PROXY` 优先于已传入的标准代理变量；省略或空值则保留标准变量原值。绕过列表使用 `no_proxy`，其次 `NO_PROXY`，均为空时默认 `localhost,127.0.0.1,::1`；内网镜像可在 `sudo env` 后增加 `NO_PROXY=localhost,127.0.0.1,::1,mirror.example.net`。标准代理变量的行为见 [curl 文档](https://everything.curl.dev/usingcurl/proxies/env.html)。
 
@@ -49,7 +49,7 @@ curl -x "$PROXY" -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/mai
 
 Headscale 读取 `/etc/headscale/config.yaml`，管理控制面、TLS、DNS 和地址池；同目录的 `derp.yaml` 管理中继列表，`policy.hujson` 管理授权，初始 `grants: []` 拒绝互访。官方 DEB 已包含 `headscale.service`，安装器执行 `systemctl enable --now headscale`。
 
-三份文件的归属不同：`config.yaml` 由安装器按 ENV 渲染并比对，不同时须 `--force`；`derp.yaml` 和 `policy.hujson` 只在缺失时初始化，之后由运维维护，重跑安装器或 `--force` 都不会改动，修改方式见[中继与访问策略](OPERATIONS.md#中继与访问策略)。因此用相同 ENV 重跑 control 即可升级 Headscale。[上游服务文件](https://github.com/juanfont/headscale/blob/v0.29.7/packaging/systemd/headscale.service)
+三份文件的归属不同：`config.yaml` 由安装器按 ENV 渲染并比对，不同时须 `--force`；`derp.yaml` 和 `policy.hujson` 只在缺失时初始化，之后由运维维护，重跑安装器或 `--force` 都不会改动，修改方式见[中继与访问策略](OPERATIONS.md#中继与访问策略)。因此用相同 ENV 重跑 control 即可升级 Headscale。`config.yaml` 可以手改，但之后重跑安装器（包括升级）会因内容不同而停止：先另存手改后的文件，加 `--force` 重跑，再把手改项加回并校验、重启。[上游服务文件](https://github.com/juanfont/headscale/blob/v0.29.7/packaging/systemd/headscale.service)
 
 DERP 的 [配置模板](../files/derper.conf) 渲染为 `/etc/derper/derper.conf`，保存四个带双引号的值，例如：
 
