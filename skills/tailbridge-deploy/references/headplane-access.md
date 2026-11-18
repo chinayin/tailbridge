@@ -27,7 +27,7 @@ If the port is occupied, identify the existing listener before choosing another 
 
 ## Display the API key and log in
 
-Read the local key path from `deployment.yaml` at `management_api.key_file`; the default is `local/headscale-api.key`. Reuse a valid key for this control server and keep its file at mode 600. If issuance or renewal is needed, follow the repository's `docs/API.md` under the user's authorization, and save only the path, ID and expiry in deployment results. Treat the key as opaque; do not assume the legacy dot-separated format.
+Read the local key path from the control host's `deployment-<machine>.yaml` at `management_api.key_file`; the default is `local/headscale-api.key`. Reuse a valid key for this control server and keep its file at mode 600. If issuance or renewal is needed, follow the repository's `docs/API.md` under the user's authorization, and save only the path, ID and expiry in deployment results. Treat the key as opaque; do not assume the legacy dot-separated format.
 
 Give the user the local file link and a command they can run in their own terminal. With the default path, from the project directory:
 
