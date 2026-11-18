@@ -63,9 +63,12 @@ services:
       DERP_PORT: ${DERP_PORT}
       TLS_CERT_PATH: /run/tailbridge/control.crt
       TLS_KEY_PATH: /run/tailbridge/control.key
+      # tbctl status 探测控制面和中继的 HTTPS
+      SSL_CERT_FILE: /etc/tailbridge/ca.crt
     volumes:
       - ${TB_INSTALL_SOURCE}/install.sh:/app/install.sh:ro
       - ${TB_E2E_SOURCE}/start.sh:/app/start.sh:ro
+      - ${TB_E2E_GENERATED}/ca.crt:/etc/tailbridge/ca.crt:ro
       - ${TB_E2E_BUNDLE}/config:/etc/headscale
       - ${TB_E2E_BUNDLE}/tls/fullchain.pem:/run/secrets/control.crt:ro
       - ${TB_E2E_BUNDLE}/secrets/control_tls_key:/run/secrets/control.key:ro

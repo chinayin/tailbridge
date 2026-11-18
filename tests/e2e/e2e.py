@@ -66,15 +66,18 @@ def private_file(name, content):
 
 
 def prepare_certificate(host, name, cert, key):
-    if cert.exists() and run(["openssl", "x509", "-in", str(cert), "-noout",
-                             "-checkhost", host], check=False).returncode == 0:
-        return
+    if cert.exists():
+        current = run(["openssl", "x509", "-in", str(cert), "-noout", "-text", "-checkhost", host], check=False)
+        signed = run(["openssl", "verify", "-x509_strict", "-CAfile", str(GENERATED / "ca.crt"), str(cert)], check=False)
+        if current.returncode == 0 and signed.returncode == 0 and "Authority Key Identifier" in current.stdout:
+            return
     key_args = ["-key", str(key)] if key.exists() else ["-newkey", "rsa:2048", "-nodes", "-keyout", str(key)]
     with tempfile.TemporaryDirectory() as folder:
         csr = Path(folder) / f"{name}.csr"
         san = Path(folder) / f"{name}.san.cnf"
         run(["openssl", "req", "-new", *key_args, "-subj", f"/CN={host}", "-out", str(csr)])
-        private_file(san, f"subjectAltName=DNS:{host}\nextendedKeyUsage=serverAuth\n")
+        private_file(san, f"subjectAltName=DNS:{host}\nextendedKeyUsage=serverAuth\n"
+                          "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid\n")
         run(["openssl", "x509", "-req", "-in", str(csr), "-CA", str(GENERATED / "ca.crt"),
              "-CAkey", str(GENERATED / "ca.key"), "-CAcreateserial", "-days", "30",
              "-extfile", str(san), "-out", str(cert)])
@@ -86,12 +89,16 @@ def prepare():
     GENERATED.chmod(0o700)
     for directory in (CONFIG.bundle, CONFIG.bundle / "tls", CONFIG.bundle / "secrets", CONFIG.bundle / "config"):
         directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-    if not (GENERATED / "ca.crt").exists():
+    ca = GENERATED / "ca.crt"
+    # Python 3.13+ verifies strictly: the CA needs key usage and leaves need an Authority Key Identifier
+    if not ca.exists() or "Key Usage" not in run(["openssl", "x509", "-in", str(ca), "-noout", "-text"],
+                                                 check=False).stdout:
         run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "30",
-             "-subj", "/CN=tailbridge-ca", "-keyout", str(GENERATED / "ca.key"),
-             "-out", str(GENERATED / "ca.crt")])
+             "-subj", "/CN=tailbridge-ca", "-addext", "basicConstraints=critical,CA:TRUE",
+             "-addext", "keyUsage=critical,keyCertSign,cRLSign", "-keyout", str(GENERATED / "ca.key"),
+             "-out", str(ca)])
     # Non-root services need the public CA through their individual bind mounts
-    (GENERATED / "ca.crt").chmod(0o644)
+    ca.chmod(0o644)
     prepare_certificate(CONFIG.server_host, "control", CONFIG.bundle / "tls/fullchain.pem",
                         CONFIG.bundle / "secrets/control_tls_key")
     for service, node in zip(CONFIG.relays, CONFIG.relay_nodes):
