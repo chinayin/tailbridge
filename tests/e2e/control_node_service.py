@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Test control and node with real systemd units. Exit codes: 0 pass, 1 fail."""
+"""Test control, DERP and node on one host with real systemd units. Exit codes: 0 pass, 1 fail."""
 
 import json
+from pathlib import Path
+import re
 import subprocess
 import sys
+import tempfile
 import uuid
 
 from e2e import Parser, build_image, run
@@ -16,12 +19,18 @@ CERT = "/etc/headscale/certs/control.crt"
 KEY = "/etc/headscale/certs/control.key"
 CA = "/root/tailbridge-ca.crt"
 NODE_NAME = "systemd-node"
+# 与控制面同机：Headscale 占用 443，中继使用 8443
+RELAY = "relay.systemd.test"
+RELAY_PORT = "8443"
+RELAY_CERT_DIR = "/etc/derper/certs"
+UNITS = ("headscale", "derper", "tailscaled")
 
 
 class ControlNodeTest(SystemdTest):
-    def __init__(self, container, proxy=""):
+    def __init__(self, container, proxy="", version=""):
         super().__init__(container)
         self.proxy = proxy
+        self.version = version
 
     def prepare(self):
         self.boot()
@@ -31,14 +40,19 @@ class ControlNodeTest(SystemdTest):
         self.exec("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
                   "-subj", "/CN=tailbridge-systemd-ca", "-addext", "basicConstraints=critical,CA:TRUE",
                   "-addext", "keyUsage=critical,keyCertSign,cRLSign", "-keyout", "/root/ca.key", "-out", CA)
-        self.exec("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", f"/CN={HOSTNAME}",
-                  "-keyout", KEY, "-out", "/root/control.csr")
-        self.exec("sh", "-c", f"printf 'subjectAltName=DNS:{HOSTNAME}\\nextendedKeyUsage=serverAuth\\n' > /root/control.ext")
-        self.exec("openssl", "x509", "-req", "-in", "/root/control.csr", "-CA", CA, "-CAkey", "/root/ca.key",
-                  "-CAcreateserial", "-days", "2", "-extfile", "/root/control.ext", "-out", CERT)
+        self.certificate(HOSTNAME, CERT, KEY)
+        self.exec("install", "-d", "-m", "755", RELAY_CERT_DIR)
+        self.certificate(RELAY, f"{RELAY_CERT_DIR}/{RELAY}.crt", f"{RELAY_CERT_DIR}/{RELAY}.key")
         self.exec("install", "-m", "644", CA, "/usr/local/share/ca-certificates/tailbridge-test.crt")
         self.exec("update-ca-certificates")
         self.templates()
+
+    def certificate(self, hostname, cert, key):
+        self.exec("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", f"/CN={hostname}",
+                  "-keyout", key, "-out", "/root/server.csr")
+        self.exec("sh", "-c", f"printf 'subjectAltName=DNS:{hostname}\\nextendedKeyUsage=serverAuth\\n' > /root/server.ext")
+        self.exec("openssl", "x509", "-req", "-in", "/root/server.csr", "-CA", CA, "-CAkey", "/root/ca.key",
+                  "-CAcreateserial", "-days", "2", "-extfile", "/root/server.ext", "-out", cert)
 
     def templates(self):
         run(["docker", "exec", "-d", self.container, "python3", "-m", "http.server", "8080",
@@ -55,17 +69,23 @@ class ControlNodeTest(SystemdTest):
             "NO_PROXY": f"localhost,127.0.0.1,::1,{HOSTNAME}",
             "no_proxy": f"localhost,127.0.0.1,::1,{HOSTNAME}",
         }
+        arguments = [role]
         if role == "control":
             environment.update(BASE_DOMAIN="nodes.systemd.test", TLS_CERT_PATH=CERT, TLS_KEY_PATH=KEY,
                                DERP_REGION_ID="910", DERP_REGION_CODE="test", DERP_REGION_NAME="Test",
-                               DERP_NODE_NAME="systemd-relay", DERP_HOSTNAME="relay.systemd.test")
+                               DERP_NODE_NAME="systemd-relay", DERP_HOSTNAME=RELAY, DERP_PORT=RELAY_PORT)
+        elif role == "derp":
+            environment.update(DERP_HOSTNAME=RELAY, DERP_PORT=RELAY_PORT, DERP_CERT_DIR=RELAY_CERT_DIR)
+            # 复用已复制的程序，不在测试容器内编译
+            arguments += ["--tailscale-version", self.version]
         else:
             environment["NODE_HOSTNAME"] = NODE_NAME
         environment.update(settings)
         # Keep registration and proxy credentials out of command arguments and timeout errors
         return run(["docker", "exec", "-i", self.container, "python3", "-c",
                     "import json,os,sys; settings=json.load(sys.stdin); "
-                    "os.execvpe('bash',['bash','/source/install.sh','--role',sys.argv[1]],{**os.environ,**settings})", role],
+                    "os.execvpe('bash',['bash','/source/install.sh','--role',*sys.argv[1:]],{**os.environ,**settings})",
+                    *arguments],
                    input=json.dumps(environment), timeout=1800, check=check)
 
     def stdin(self, data, *args):
@@ -83,6 +103,20 @@ class ControlNodeTest(SystemdTest):
         self.active("headscale")
         self.wait(lambda: self.exec("curl", "-q", "-fsS", "--noproxy", "*", "--max-time", "3",
                                    f"{SERVER_URL}/health", check=False).returncode == 0, "control HTTPS")
+
+    def relay_ready(self):
+        self.active("derper")
+        self.wait(lambda: self.exec("curl", "-q", "-fsS", "--noproxy", "*", "--max-time", "3", "--output", "/dev/null",
+                                   f"https://{RELAY}:{RELAY_PORT}/", check=False).returncode == 0, "relay HTTPS")
+
+    def relayed(self):
+        """The relay admits only keys control verifies; a home connection proves the whole local path."""
+        def connected():
+            variables = json.loads(self.exec("curl", "-q", "-fsS", "--noproxy", "*", "--max-time", "3",
+                                             f"https://{RELAY}:{RELAY_PORT}/debug/vars").stdout)
+            return variables["derp"]["gauge_current_home_connections"] >= 1
+        # After boot the relay refuses the node until control answers; the client retries with backoff
+        self.wait(connected, "node home connection on the local relay", timeout=120)
 
     def node_ready(self):
         self.active("tailscaled")
@@ -105,11 +139,13 @@ class ControlNodeTest(SystemdTest):
         require(len(nodes) == 1, "Registration created duplicate nodes")
         require(str(nodes[0]["id"]) == str(own["ID"]), "Control and node IDs differ")
         return {"noise": self.exec("sha256sum", "/var/lib/headscale/noise_private.key").stdout,
+                "relay": self.exec("sha256sum", "/var/lib/derper/derper.key").stdout,
                 "id": own["ID"], "key": own["PublicKey"], "ips": own["TailscaleIPs"]}
 
     def files(self):
         return self.exec("sha256sum", "/etc/headscale/config.yaml", "/etc/headscale/derp.yaml",
                          "/etc/headscale/policy.hujson", "/etc/default/tailscaled",
+                         "/etc/derper/derper.conf", "/etc/systemd/system/derper.service",
                          "/usr/lib/systemd/system/headscale.service",
                          "/lib/systemd/system/tailscaled.service").stdout
 
@@ -173,6 +209,14 @@ class ControlNodeTest(SystemdTest):
                 "Backup is not private to the service account")
         passed("backup timer is enabled and snapshots control state as the service account")
 
+        self.install("derp")
+        self.relay_ready()
+        self.control_ready()
+        uid = self.exec("id", "-u", "derper").stdout.strip()
+        owner = self.exec("stat", "-c", "%u", f"/proc/{self.pid('derper')}").stdout.strip()
+        require(owner == uid and uid != "0", "DERP is not running as its service account")
+        passed("derp runs beside control as its own account on TCP 8443 while Headscale keeps 443")
+
         rejected = self.install("node", check=False)
         require(rejected.returncode == 2, "First registration did not require NODE_AUTHKEY")
         require(self.exec("test", "-e", "/var/lib/tailscale/tailscaled.state", check=False).returncode != 0,
@@ -199,15 +243,18 @@ class ControlNodeTest(SystemdTest):
         baseline = self.identity()
         files = self.files()
         passed("node installs the official service, creates a TUN interface and registers with control")
+        self.relayed()
+        passed("node reaches the relay on its own host after control verifies its key")
 
-        pids = [self.pid(unit) for unit in ("headscale", "tailscaled")]
+        pids = [self.pid(unit) for unit in UNITS]
         self.install("control")
+        self.install("derp")
         self.install("node", NODE_HOSTNAME="must-not-replace-saved-name")
-        require([self.pid(unit) for unit in ("headscale", "tailscaled")] == pids, "Identical reinstall restarted services")
+        require([self.pid(unit) for unit in UNITS] == pids, "Identical reinstall restarted services")
         require(self.identity() == baseline and self.files() == files, "Reinstall changed identities or configuration")
         prefs = json.loads(self.exec("tailscale", "debug", "prefs").stdout)
         require(prefs["Hostname"] == NODE_NAME and prefs["ControlURL"] == SERVER_URL, "Reinstall changed saved preferences")
-        passed("control and node reinstall preserves service processes, configuration and registered identity")
+        passed("reinstalling all three roles preserves service processes, configuration and identities")
 
         policy = '{"grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"]}]}\n'
         self.stdin(policy, "tbctl", "publish", "policy")
@@ -231,11 +278,12 @@ class ControlNodeTest(SystemdTest):
         require(self.identity() == baseline, "Resuming the node replaced its identity")
         passed("node resumes saved registration from Stopped without an authentication key")
 
-        for unit in ("headscale", "tailscaled"):
+        for unit in UNITS:
             previous_pid = self.pid(unit)
             self.exec("systemctl", "kill", "--signal=KILL", "--kill-whom=main", unit)
             self.wait(lambda: self.pid(unit) not in {0, previous_pid}, f"automatic {unit} restart")
             self.control_ready()
+            self.relay_ready()
             self.node_ready()
             require(self.identity() == baseline, f"{unit} crash recovery changed identity")
             passed(f"systemd recovers {unit} after process failure with the same registered identity")
@@ -243,16 +291,19 @@ class ControlNodeTest(SystemdTest):
         run(["docker", "restart", "--time", "10", self.container], timeout=30)
         self.boot()
         self.control_ready()
+        self.relay_ready()
         self.node_ready()
+        self.relayed()
         require(self.identity() == baseline and self.files() == files, "Boot changed identity or configuration")
-        passed("container boot starts control and node without installer environment or registration credentials")
+        passed("container boot starts all three roles without installer environment or registration credentials")
         self.templates()
-        pids = [self.pid(unit) for unit in ("headscale", "tailscaled")]
+        pids = [self.pid(unit) for unit in UNITS]
         self.install("control")
+        self.install("derp")
         self.install("node")
-        require([self.pid(unit) for unit in ("headscale", "tailscaled")] == pids, "Reinstall after boot restarted services")
+        require([self.pid(unit) for unit in UNITS] == pids, "Reinstall after boot restarted services")
         require(self.identity() == baseline, "Reinstall after boot changed registration")
-        passed("reinstall after boot preserves both services and node registration")
+        passed("reinstall after boot preserves all services and node registration")
 
 
 def main():
@@ -260,26 +311,35 @@ def main():
     parser.add_argument("--config", help="Existing E2E environment file")
     args = parser.parse_args()
     config = load_config(args.config)
+    source = run([*config.compose, "ps", "--quiet", "derp-main"], env=config.env).stdout.strip()
+    require(source, "Start the E2E DERP container before running this test")
+    version = run(["docker", "exec", source, "/usr/local/bin/derper", "--version"]).stdout.strip()
+    require(re.fullmatch(r"\d+\.\d+\.\d+(?:-ERR-BuildInfo)?", version), f"Unexpected derper version: {version}")
+    version = version.removesuffix("-ERR-BuildInfo")
     image = config.images["systemd"]
     build_image("systemd.Dockerfile", image, RUNTIME_IMAGE=config.images["runtime"])
     container = f"tailbridge-control-node-service-{uuid.uuid4().hex[:12]}"
     attempted = False
     created = False
     try:
-        attempted = True
-        run(["docker", "create", "--name", container, "--privileged", "--cgroupns=private",
-             "--network", "bridge", "--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp",
-             "--add-host", f"{HOSTNAME}:127.0.0.1", "--add-host", "relay.systemd.test:127.0.0.1",
-             "--add-host", "host.docker.internal:host-gateway",
-             "--mount", f"type=bind,src={PROJECT_ROOT / 'install.sh'},dst=/source/install.sh,readonly",
-             "--mount", f"type=bind,src={PROJECT_ROOT / 'files'},dst=/source/files,readonly", image])
-        created = True
-        run(["docker", "start", container])
-        ControlNodeTest(container, config.env.get("TB_INSTALL_PROXY", "")).verify()
+        with tempfile.TemporaryDirectory(prefix="tailbridge-control-node-service-") as folder:
+            binary = Path(folder) / "derper"
+            run(["docker", "cp", f"{source}:/usr/local/bin/derper", str(binary)])
+            attempted = True
+            run(["docker", "create", "--name", container, "--privileged", "--cgroupns=private",
+                 "--network", "bridge", "--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp",
+                 "--add-host", f"{HOSTNAME}:127.0.0.1", "--add-host", f"{RELAY}:127.0.0.1",
+                 "--add-host", "host.docker.internal:host-gateway",
+                 "--mount", f"type=bind,src={PROJECT_ROOT / 'install.sh'},dst=/source/install.sh,readonly",
+                 "--mount", f"type=bind,src={PROJECT_ROOT / 'files'},dst=/source/files,readonly", image])
+            created = True
+            run(["docker", "cp", str(binary), f"{container}:/usr/local/bin/derper"])
+            run(["docker", "start", container])
+            ControlNodeTest(container, config.env.get("TB_INSTALL_PROXY", ""), version).verify()
     except BaseException:
         if created:
             try:
-                run(["docker", "exec", container, "journalctl", "-u", "headscale", "-u", "tailscaled",
+                run(["docker", "exec", container, "journalctl", "-u", "headscale", "-u", "derper", "-u", "tailscaled",
                      "-n", "50", "--no-pager"], capture=False, check=False)
             except (OSError, RuntimeError, subprocess.TimeoutExpired):
                 print(f"Warning: diagnostics unavailable for {container}", file=sys.stderr)
@@ -293,7 +353,7 @@ def main():
                 if not failing:
                     raise
                 print(f"Warning: could not remove test container {container}", file=sys.stderr)
-    passed("isolated control/node container removed without changing existing E2E state")
+    passed("isolated standalone container removed without changing existing E2E state")
 
 
 if __name__ == "__main__":

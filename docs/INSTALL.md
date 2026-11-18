@@ -2,7 +2,7 @@
 
 标准平台为 Ubuntu 26.04 LTS，兼容 Ubuntu 26.10 和 Debian 13，均支持 `amd64` / `arm64`；需要 Bash 和 curl。生产服务器优先使用 LTS：26.10 是过渡版本，支持期只有 9 个月。Debian 最小安装通常没有 sudo，以 root 执行时去掉示例中的 `sudo`。按机器承担的角色阅读：[control 控制面](#control-控制面)、[derp 中继](#derp-中继)、[node 设备](#node-设备)。同机部署多个角色时合并相应的端口要求。
 
-首次只需确定控制入口和第一个中继，无需预先规划所有地域。可以先在一台机器安装 control + 独立 derper，后续再添加地域。控制面启动要求 Map 非空；节点接入前还需让其中的中继实际可达，见[架构](ARCHITECTURE.md#组件与角色)。
+首次只需确定控制入口和第一个中继，无需预先规划所有地域。可以先在一台机器安装 control + 独立 derper，后续再添加地域；出口也放在这台机器时见[单机部署](#单机部署)。控制面启动要求 Map 非空；节点接入前还需让其中的中继实际可达，见[架构](ARCHITECTURE.md#组件与角色)。
 
 ## 共用准备
 
@@ -269,6 +269,19 @@ sudo tailscale netcheck
 复用身份前会核对已保存的 `ControlURL`；与 `SERVER_URL` 不同、为空或无法读取时拒绝继续，`--force` 不切换身份。
 
 需要出口时在上述命令中增加 `ADVERTISE_EXIT_NODE=true`，随后完成[控制面批准与授权](OPERATIONS.md#配置-linux-出口)。
+
+## 单机部署
+
+一台机器同时承担 control、derp 和出口 node，不需要新的安装角色：在同一台机器上按顺序各运行一次安装器，输入与分机部署相同。机器名使用 `standalone` 角色，如 `tb-standalone-hk-01`，见[节点命名](NODE_NAMING.md#机器名)。
+
+1. 按[与控制面同机](#与控制面同机)准备两个域名和证书，安装 control 和 derp。
+2. 在本机签发[管理 API Key](API.md#认证)，创建用户并签发[注册密钥](API.md#用户与注册密钥)；密钥文件已在本机，无需传送。
+3. 按 [node 设备](#node-设备)安装并增加 `ADVERTISE_EXIT_NODE=true`；设备名默认是本机 hostname，客户端选择出口时看到的就是它。
+4. 按[配置 Linux 出口](OPERATIONS.md#配置-linux-出口)批准路由并授权，再从另一台设备执行[出口测试](#连通性测试)。
+
+入站合计开放 TCP 443 / 8443、UDP 3478 / 41641。node 通过公网域名访问本机的控制面和中继，两个域名须能从本机解析并连通；在本机用 `sudo tailscale netcheck` 确认中继可达。
+
+单机没有冗余：出口与控制面共用公网 IP、带宽和流量配额，该 IP 不可用时控制面、中继和出口同时中断。之后可按分机方式新增中继或出口，无需迁移。三个角色同机的服务生命周期由 [`make e2e-systemd`](E2E_TEST_GUIDE.md#检查与停止) 覆盖；云主机经公网 IP 回连本机的路径未在实际部署中验证。
 
 ## 连通性测试
 

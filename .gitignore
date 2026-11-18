@@ -29,6 +29,7 @@ Desktop.ini
 # 工具生成的计划与工作目录（任意层级，包括 docs/superpowers/）
 superpowers/
 .superpowers/
+/.claude/worktrees/
 
 # Python 环境、缓存及测试产物
 .venv/

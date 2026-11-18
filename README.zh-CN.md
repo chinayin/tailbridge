@@ -26,7 +26,7 @@ Headscale 管理设备与访问策略。设备使用 WireGuard 加密通信，�
 
 ## 如何使用
 
-Bash 安装器以 Ubuntu 26.04 LTS 为标准平台，兼容 Ubuntu 26.10 和 Debian 13（`amd64` / `arm64`）。先按[安装说明](docs/INSTALL.md)部署 `control` 和至少一个 `derp`，两者可以同机。
+Bash 安装器以 Ubuntu 26.04 LTS 为标准平台，兼容 Ubuntu 26.10 和 Debian 13（`amd64` / `arm64`）。先按[安装说明](docs/INSTALL.md)部署 `control` 和至少一个 `derp`，两者可以同机；出口也放在同一台机器时见[单机部署](docs/INSTALL.md#单机部署)。
 
 将节点注册密钥保存为 `node-auth.key` 后，在各 Linux 设备上执行远程安装：
 
