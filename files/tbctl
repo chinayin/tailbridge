@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-"""Maintain the Headscale control plane: publish policy or DERP map, back up state.
+"""Maintain the Headscale control plane: publish policy or DERP map, back up state, report status.
 
 Usage: tbctl publish policy|derp < FILE
        tbctl backup
-Exit codes: 0 success; 1 invalid input or runtime failure.
+       tbctl status [--json]
+Exit codes: 0 success; 1 invalid input or runtime failure; 2 a status check failed.
 """
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
 import shutil
 import signal
+import socket
 import sqlite3
+import ssl
+import struct
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
+import zlib
 
 CONFIG = Path('/etc/headscale')
 STATE = Path('/var/lib/headscale')
@@ -22,6 +29,14 @@ BACKUPS = Path('/var/backups/headscale')
 SOCKET = Path('/run/headscale/headscale.sock')
 KEEP_DAYS = 14
 STAMP = '%Y%m%dT%H%M%SZ'
+# Status thresholds: warn first, fail only when service is at risk
+CERT_WARN, CERT_FAIL = timedelta(days=21), timedelta(days=7)
+BACKUP_WARN = timedelta(hours=26)
+OFFLINE_WARN = timedelta(hours=24)
+EXPIRY_WARN = timedelta(days=7)
+DISK_WARN = 0.85
+TIMEOUT = 5
+LEVELS = ('ok', 'warn', 'fail')
 
 
 def headscale(*args):
@@ -32,6 +47,7 @@ def headscale(*args):
     result = subprocess.run(command, capture_output=True, text=True, timeout=60)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or 'headscale command failed')
+    return result.stdout
 
 
 def check_policy(path):
@@ -62,17 +78,24 @@ def check_derp(path):
                 raise ValueError(f'region {region_id}: each node needs name, hostname and matching regionid')
 
 
-def reload_policy():
-    # Headscale reloads the file policy on SIGHUP; this also works without systemd
+def serve_pid():
+    # Scan /proc so this also works without systemd
     for entry in Path('/proc').iterdir():
         try:
             argv = (entry / 'cmdline').read_bytes().split(b'\0')
         except OSError:
             continue
         if argv[:2] and Path(argv[0].decode()).name == 'headscale' and argv[1:2] == [b'serve']:
-            os.kill(int(entry.name), signal.SIGHUP)
-            return True
-    return False
+            return int(entry.name)
+    return None
+
+
+def reload_policy():
+    # Headscale reloads the file policy on SIGHUP
+    pid = serve_pid()
+    if pid:
+        os.kill(pid, signal.SIGHUP)
+    return bool(pid)
 
 
 def publish(kind, content):
@@ -134,6 +157,152 @@ def backup(now=None):
     print(f'Backed up control state to {BACKUPS / stamp}', file=sys.stderr)
 
 
+def probe_https(host, port, path, now):
+    # Returns the HTTP status and remaining certificate validity; trust comes from the system CA store
+    context = ssl.create_default_context()
+    with socket.create_connection((host, port), timeout=TIMEOUT) as tcp:
+        with context.wrap_socket(tcp, server_hostname=host) as tls:
+            expires = datetime.fromtimestamp(ssl.cert_time_to_seconds(tls.getpeercert()['notAfter']), timezone.utc)
+            tls.sendall(f'GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n'.encode())
+            line = tls.recv(1024).split(b'\r\n', 1)[0].split()
+    return int(line[1]) if len(line) > 1 and line[1].isdigit() else 0, expires - now
+
+
+def probe_stun(host, port):
+    # Tailscale's STUN server ignores requests without SOFTWARE=tailnode and a final FINGERPRINT
+    transaction = os.urandom(12)
+    packet = struct.pack('!HHI', 1, 20, 0x2112A442) + transaction
+    packet += struct.pack('!HH', 0x8022, 8) + b'tailnode'
+    packet += struct.pack('!HHI', 0x8028, 4, zlib.crc32(packet) ^ 0x5354554E)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        udp.settimeout(TIMEOUT)
+        udp.sendto(packet, (socket.gethostbyname(host), port))
+        response = udp.recv(1024)
+    if response[:2] != b'\x01\x01' or response[8:20] != transaction:
+        raise RuntimeError('invalid STUN response')
+
+
+def https_check(host, port, path, now, expected=200):
+    code, remaining = probe_https(host, port, path, now)
+    detail = f'HTTP {code}, certificate expires in {remaining.days} days'
+    if code != expected or remaining < CERT_FAIL:
+        return 'fail', detail
+    return ('warn' if remaining < CERT_WARN else 'ok'), detail
+
+
+def service_check():
+    pid = serve_pid()
+    return ('ok', f'pid {pid}') if pid else ('fail', 'headscale serve is not running')
+
+
+def policy_check():
+    check_policy(CONFIG / 'policy.hujson')
+    return 'ok', 'policy check passed'
+
+
+def disk_check():
+    usage = shutil.disk_usage(STATE)
+    used = usage.used / usage.total
+    return ('warn' if used > DISK_WARN else 'ok'), f'{used:.0%} used'
+
+
+def stun_check(host, port):
+    probe_stun(host, port)
+    return 'ok', 'binding response'
+
+
+def backup_check(now):
+    snapshots = sorted(p.name for p in BACKUPS.iterdir() if not p.name.startswith('.'))
+    if not snapshots:
+        return 'warn', 'no snapshot'
+    age = now - datetime.strptime(snapshots[-1], STAMP).replace(tzinfo=timezone.utc)
+    return ('warn' if age > BACKUP_WARN else 'ok'), f'newest {snapshots[-1]}, {int(age.total_seconds() // 3600)}h old'
+
+
+def timestamp(value):
+    # Headscale JSON encodes times as protobuf {seconds, nanos}; zero or absent means unset
+    seconds = (value or {}).get('seconds', 0)
+    return datetime.fromtimestamp(seconds, timezone.utc) if seconds > 0 else None
+
+
+def node_check(node, now):
+    if node['expiry'] and node['expiry'] - now < EXPIRY_WARN:
+        return 'warn', f'key expires {node["expiry"]:%Y-%m-%d}'
+    if node['online']:
+        return 'ok', 'online'
+    seen = node['last_seen']
+    if not seen:
+        return 'warn', 'never seen'
+    return ('warn' if now - seen > OFFLINE_WARN else 'ok'), f'offline since {seen:%Y-%m-%d %H:%M}Z'
+
+
+def status(now=None):
+    import yaml
+    now = now or datetime.now(timezone.utc)
+    report = {'generated_at': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'checks': []}
+
+    def check(name, function, *args):
+        try:
+            level, detail = function(*args)
+        except Exception as error:
+            level, detail = 'fail', str(error) or type(error).__name__
+        report['checks'].append({'name': name, 'status': level, 'detail': detail})
+
+    config = yaml.safe_load((CONFIG / 'config.yaml').read_text())
+    origin = urlsplit(config['server_url'])
+    report['server_url'] = config['server_url']
+    check('control.service', service_check)
+    check('control.health', https_check, origin.hostname, origin.port or 443, '/health', now)
+    check('control.policy', policy_check)
+    check('control.backup', backup_check, now)
+    check('control.disk', disk_check)
+
+    report['regions'] = []
+    regions = yaml.safe_load((CONFIG / 'derp.yaml').read_text())['regions']
+    for region_id, region in sorted(regions.items()):
+        nodes = []
+        for node in region['nodes']:
+            # Headscale treats port 0 as the default and STUN port -1 as disabled
+            port, stun = node.get('derpport') or 443, node.get('stunport') or 3478
+            nodes.append({'name': node['name'], 'hostname': node['hostname'], 'derpport': port, 'stunport': stun})
+            prefix = f'derp.{region_id}.{node["name"]}'
+            check(prefix + '.https', https_check, node['hostname'], port, '/', now)
+            if stun > 0:
+                check(prefix + '.stun', stun_check, node['hostname'], stun)
+        report['regions'].append({'id': region_id, 'code': region.get('regioncode'),
+                                  'name': region.get('regionname'), 'nodes': nodes})
+
+    report['nodes'] = []
+    listed = []
+
+    def list_nodes():
+        listed.extend(json.loads(headscale('nodes', 'list', '--output', 'json') or '[]'))
+        return 'ok', f'{len(listed)} registered'
+
+    check('nodes', list_nodes)
+    for item in listed:
+        # Keys and registration details stay out of the report
+        node = {'id': item['id'], 'name': item.get('given_name') or item.get('name'),
+                'user': (item.get('user') or {}).get('name'), 'ips': item.get('ip_addresses') or [],
+                'online': bool(item.get('online')), 'last_seen': timestamp(item.get('last_seen')),
+                'expiry': timestamp(item.get('expiry'))}
+        check(f'node.{node["name"]}', node_check, node, now)
+        report['nodes'].append({key: value.strftime('%Y-%m-%dT%H:%M:%SZ') if isinstance(value, datetime) else value
+                                for key, value in node.items()})
+
+    report['status'] = max((c['status'] for c in report['checks']), key=LEVELS.index, default='ok')
+    return report
+
+
+def print_status(report):
+    print(f'{report["status"].upper()}  {report["server_url"]}  {report["generated_at"]}')
+    for region in report['regions']:
+        hosts = ', '.join(f'{n["hostname"]}:{n["derpport"]}' for n in region['nodes'])
+        print(f'  region {region["id"]} {region["code"]} ({region["name"]}): {hosts}')
+    for check in report['checks']:
+        print(f'  {check["status"]:<4}  {check["name"]}: {check["detail"]}')
+
+
 def main(args):
     if args[:1] == ['publish'] and args[1:] in (['policy'], ['derp']):
         if os.geteuid() != 0:
@@ -144,6 +313,15 @@ def main(args):
             # Root must not create SQLite side files the service account cannot open
             os.execvp('runuser', ['runuser', '-u', 'headscale', '--', sys.argv[0], 'backup'])
         backup()
+    elif args in (['status'], ['status', '--json']):
+        if os.geteuid() != 0:
+            raise RuntimeError('status must run as root')
+        report = status()
+        if args[1:]:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print_status(report)
+        return 2 if report['status'] == 'fail' else 0
     else:
         print(__doc__.strip(), file=sys.stderr)
         return 1

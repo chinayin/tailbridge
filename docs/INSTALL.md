@@ -141,8 +141,23 @@ control 同时安装 `/usr/local/sbin/tbctl` 和每日执行的 `tbctl-backup.ti
 | `sudo tbctl publish policy < policy.hujson` | 以 `headscale` 账户执行 `headscale policy check`（服务运行中经 gRPC 校验），通过后原子替换 `/etc/headscale/policy.hujson`，并发送 SIGHUP 重载 |
 | `sudo tbctl publish derp < derp.yaml` | 校验 YAML 结构及区域、节点 ID 一致，通过后原子替换 `/etc/headscale/derp.yaml`；Headscale 按 `derp.update_frequency` 自动重读 |
 | `sudo tbctl backup` | 立即备份，与定时器相同 |
+| `sudo tbctl status [--json]` | 只读巡检：输出拓扑和每项检查的 `ok`/`warn`/`fail` |
 
-`publish` 从 stdin 读取完整文件；校验失败时原文件不变，内容相同时不做任何操作。退出码 `0` 成功，`1` 输入无效或执行失败。
+`publish` 从 stdin 读取完整文件；校验失败时原文件不变，内容相同时不做任何操作。退出码 `0` 成功，`1` 输入无效或执行失败，`2` `status` 有失败项。
+
+**巡检内容**：`status` 从控制面所在位置检查以下各项，不修改任何状态，也不需要管理 API Key：
+
+| 检查 | `warn` | `fail` |
+| --- | --- | --- |
+| `headscale serve` 进程 | | 未运行 |
+| `server_url` 的 `/health` 与证书 | 证书剩余少于 21 天 | 非 200、TLS 不受信任或剩余少于 7 天 |
+| 当前策略 `policy check` | | 校验失败 |
+| 最新备份 | 超过 26 小时或没有快照 | |
+| 数据盘 | 使用超过 85% | |
+| DERP Map 中每个节点的 HTTPS 与证书、STUN 绑定响应 | 证书剩余少于 21 天 | 不可达、无响应或剩余少于 7 天 |
+| 每个注册节点 | 离线超过 24 小时、从未上线或 7 天内过期 | |
+
+`--json` 列出 `regions`、`nodes`（ID、名称、用户、地址、在线、最后上线、过期时间）和 `checks`，不含节点密钥和注册密钥。中继探测走公网，只能说明控制面所在位置可达；客户端实际选择的中继以 `tailscale netcheck` 为准。
 
 **备份逻辑**：定时器每天随机延迟一小时内触发；关机错过的执行在开机后补跑。它以 `headscale` 服务账户执行 `tbctl backup`：用 SQLite 在线备份 API 从运行中的数据库生成一致快照，连同 `noise_private.key` 和 `/etc/headscale/` 下的三份配置写入 `/var/backups/headscale/<UTC时间>/`，并删除 14 天前的快照。
 

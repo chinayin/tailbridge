@@ -4,6 +4,8 @@
 
 ## 服务与证书
 
+日常巡检在控制面执行 `sudo tbctl status`，一次检查控制面、备份、全部中继和节点；检查项与阈值见 [tbctl 运维工具](INSTALL.md#tbctl-运维工具)。单项排查：
+
 ```bash
 sudo systemctl status headscale --no-pager
 sudo journalctl -u headscale -n 50 --no-pager

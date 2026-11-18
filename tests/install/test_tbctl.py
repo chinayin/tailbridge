@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -126,6 +127,67 @@ class ControlToolTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in snapshot.iterdir()),
                          ['config.yaml', 'db.sqlite', 'derp.yaml', 'noise_private.key', 'policy.hujson'])
         self.assertEqual((snapshot / 'db.sqlite').stat().st_mode & 0o777, 0o600)
+
+    def status_fixture(self, now, nodes):
+        (self.tool.CONFIG / 'config.yaml').write_text('server_url: https://control.example.test:8443\n')
+        self.derp.write_text(DERP.replace('stunport: 3478', 'stunport: 0') + DERP.replace('910', '911')
+                             .replace('regions:\n', '').replace('derp.example.test', 'stunless.example.test')
+                             .replace('stunport: 3478', 'stunport: -1'))
+        (self.tool.BACKUPS / (now - timedelta(hours=2)).strftime(self.tool.STAMP)).mkdir()
+        listed = json.dumps(nodes)
+        probes = []
+
+        def https(host, port, path, when):
+            probes.append(('https', host, port, path))
+            return 200, timedelta(days=60 if host != 'stunless.example.test' else 10)
+
+        return probes, [
+            patch.object(self.tool, 'serve_pid', return_value=42),
+            patch.object(self.tool, 'check_policy'),
+            patch.object(self.tool, 'headscale', return_value=listed),
+            patch.object(self.tool, 'probe_https', side_effect=https),
+            patch.object(self.tool, 'probe_stun', side_effect=lambda host, port: probes.append(('stun', host, port))),
+        ]
+
+    def test_status_reports_topology_checks_and_redacts_node_keys(self):
+        now = datetime(2026, 11, 18, tzinfo=timezone.utc)
+        seen = {'seconds': int((now - timedelta(hours=30)).timestamp())}
+        nodes = [
+            {'id': 1, 'given_name': 'tb-node-a', 'user': {'name': 'ops'}, 'online': True, 'node_key': 'nodekey:secret',
+             'pre_auth_key': {'key': 'secret'}, 'ip_addresses': ['100.77.0.1'], 'last_seen': seen},
+            {'id': 2, 'given_name': 'tb-node-b', 'user': {'name': 'ops'}, 'online': False, 'last_seen': seen,
+             'expiry': {'seconds': -62135596800}},
+        ]
+        probes, patches = self.status_fixture(now, nodes)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            report = self.tool.status(now)
+        checks = {c['name']: c['status'] for c in report['checks']}
+        self.assertEqual(checks, {
+            'control.service': 'ok', 'control.health': 'ok', 'control.policy': 'ok', 'control.backup': 'ok',
+            'control.disk': checks['control.disk'], 'derp.910.tb-derp-hk-01.https': 'ok',
+            'derp.910.tb-derp-hk-01.stun': 'ok', 'derp.911.tb-derp-hk-01.https': 'warn', 'nodes': 'ok',
+            'node.tb-node-a': 'ok', 'node.tb-node-b': 'warn'})
+        self.assertEqual(report['status'], 'warn')
+        self.assertIn(('https', 'control.example.test', 8443, '/health'), probes)
+        self.assertIn(('stun', 'derp.example.test', 3478), probes)
+        self.assertNotIn('stunless.example.test', [p[1] for p in probes if p[0] == 'stun'])
+        self.assertEqual([r['id'] for r in report['regions']], [910, 911])
+        self.assertNotIn('secret', json.dumps(report))
+        self.assertEqual(report['nodes'][1]['expiry'], None)
+
+    def test_status_fails_on_unreachable_relay_or_expiring_certificate(self):
+        now = datetime(2026, 11, 18, tzinfo=timezone.utc)
+        probes, patches = self.status_fixture(now, [])
+        patches[3] = patch.object(self.tool, 'probe_https', side_effect=[(200, timedelta(days=5)), OSError('timed out'),
+                                                                           (200, timedelta(days=60))])
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            report = self.tool.status(now)
+        failed = [c['name'] for c in report['checks'] if c['status'] == 'fail']
+        self.assertEqual(failed, ['control.health', 'derp.910.tb-derp-hk-01.https'])
+        self.assertEqual(report['status'], 'fail')
+        with patch.object(self.tool, 'status', return_value=report), patch.object(self.tool.os, 'geteuid', return_value=0), \
+                patch('sys.stdout'):
+            self.assertEqual(self.tool.main(['status', '--json']), 2)
 
 
 if __name__ == '__main__':
