@@ -45,7 +45,7 @@ Keep inputs and results in ignored `local/`. `deploy-<machine>.yaml` is input; r
 | `aws/<machine>.yaml` | Provider, resource IDs or names, region, plan and price, static address, SSH user, key path and verified host fingerprint |
 | `dns.yaml` | Zone ID, record IDs, names, values and proxy status |
 | `acme.yaml` | Renewal token metadata, credential file path, certificate lineage per host and expiry |
-| `deployment.yaml` | Source revision, installer checksum, stage, checks, pending verification and management API key path/expiry |
+| `deployment-<machine>.yaml` | Source revision, installer checksum, stage, checks, pending verification and management API key path/expiry |
 | `inspect.yaml` | Latest inspection: time, overall status, per-host checks and topology |
 | `nodes/<device>.yaml` | Control URL, node ID, name, user, tailnet addresses, registration/online status and verification time |
 
