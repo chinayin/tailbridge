@@ -2,7 +2,7 @@
 # Install official components on the target; read templates from files/
 set -euo pipefail
 
-VERSION=0.6.0
+VERSION=0.6.1
 HEADSCALE_VERSION=0.29.7
 TAILSCALE_VERSION=1.104.5
 TAILSCALE_REPO=https://pkgs.tailscale.com/stable
@@ -29,7 +29,8 @@ Usage: install.sh --role control|derp|node [options]
        install.sh test [--exit-node NAME_OR_IP]
   --headscale-version X.Y.Z   Override the Headscale version
   --tailscale-version X.Y.Z   Override the Tailscale and derper version
-  --force                    Replace differing config.yaml or derper configuration
+  --force                    Replace differing config.yaml, derper configuration and
+                             service unit, or exit forwarding settings
                              (never policy, DERP map or identity)
   --dry-run                  Show URLs and paths without making changes
   --version                  Show the installer version

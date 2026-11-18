@@ -1,6 +1,6 @@
 # TailBridge 架构
 
-TailBridge 使用 Headscale、官方 Tailscale 客户端和独立 derper，连接个人设备、家庭、公司及云主机。业务流量优先直连，无法直连时经自建中继转发加密数据。安装接口见 [安装与配置](INSTALL.md)。
+TailBridge 使用 Headscale、官方 Tailscale 客户端和独立 derper，连接个人设备、家庭、团队及云主机。业务流量优先直连，无法直连时经自建中继转发加密数据。安装接口见 [安装与配置](INSTALL.md)。
 
 ## 组件与角色
 
@@ -70,9 +70,9 @@ flowchart LR
 
 部署方准备 SSH、首次入网凭据、DERP 文件证书和异机备份；安装器按角色安装，有 systemd 时启用并启动服务，node 等 daemon 就绪后注册。无 systemd 时仍准备服务文件和账户，由调用方启动进程及注册节点。设备状态由目标机持久化，实际参数和凭据放在目标机或忽略的 `local/`。
 
-- 安装器与测试统一使用 Bash，启用 `set -euo pipefail` 并执行 ShellCheck；控制面运维工具使用 Python 3 标准库及 PyYAML。
+- 安装器与测试统一使用 Bash 并执行 ShellCheck，启用 `set -euo pipefail`；汇总结果的测试入口 `test.sh` 不加 `-e`，单项失败计入结果。控制面运维工具使用 Python 3 标准库及 PyYAML。
 - 输入规则只在 `install.sh` 维护，E2E 通过 `--dry-run` 复用；derper 启动参数只在 `files/derper.service` 维护，E2E 容器读取同一 `ExecStart`。
 - 所有候选配置先完成替换与覆盖检查再发布；原生配置和策略校验通过后才能启用或重启服务。
-- `--force` 只覆盖 `config.yaml` 和 derper 配置，不改策略、Map 或身份，不自动重新认证；失效或损坏状态保留并报错。
+- `--force` 的覆盖范围见[共用选项](INSTALL.md#共用选项与验证)；不改策略、Map 或身份，不自动重新认证；失效或损坏状态保留并报错。
 - `--dry-run` 无副作用；离线测试不代替真实组件、服务和网络验收。
 - 默认组件版本只在 `install.sh` 顶部维护；文档中的上游链接固定到当时验证的版本，作为引用依据。

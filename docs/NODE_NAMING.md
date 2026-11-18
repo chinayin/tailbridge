@@ -6,7 +6,7 @@
 
 管理用服务器采用 `tb-<角色>-<地域>-<序号>`，例如 `tb-derp-hk-01`；不加环境和云厂商前缀。
 
-- 角色使用 `control`、`derp`、`node`；地域用 `us`、`jp`、`hr`、`hk`、`cn` 等约定的两字母短码。
+- 角色使用 `control`、`derp`、`node`；地域用 `us`、`jp`、`kr`、`hk`、`cn` 等约定的两字母短码。
 - 家庭用 `home`，工作地点或工区用 `work`，无需加国内或海外标识。默认各一个站点，可省略序号，如 `tb-derp-home`、`tb-derp-work`。
 - 云服务器序号从 `01` 开始，同角色、同短码跨云厂商统一编号。
 - 使用小写字母、数字和连字符，首尾不用连字符。机器名最多 48 字符、DERP 区域代码最多 32 字符。
@@ -28,7 +28,7 @@ AWS `Name`、阿里云实例显示名、系统 hostname 和 Tailscale 设备名�
 | --- | --- | --- |
 | `ManagedBy` | 所有可打标签的资源 | `tailbridge` |
 | `Name` | EC2 实例、EIP、卷、安全组；Lightsail 资源名即名称，不另加 | 上表名称 |
-| `Description` | 实例 | 英文备注 `TailBridge <role>: <purpose>`，如 `TailBridge derp: DERP 911 Hong Kong`；不写域名、地址或凭据 |
+| `Description` | 实例 | 英文备注 `TailBridge <role>: <purpose>`，如 `TailBridge derp: DERP 910 Hong Kong`；不写域名、地址或凭据 |
 
 AWS 实例没有备注字段，用 `Description` 标签代替；阿里云写入实例描述并打同样的 `ManagedBy` 标签。AWS 标签值只用字母、数字、空格和 `_ . : / = + - @`。实例名、安全组名创建后不可改，已有资源保持原名。
 

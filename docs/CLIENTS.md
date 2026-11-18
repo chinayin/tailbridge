@@ -6,7 +6,7 @@
 
 - **macOS 图形版**：安装并打开 [Tailscale 官方独立版](https://tailscale.com/docs/install/mac)（Homebrew 对应 `tailscale-app`），允许添加 VPN；在 **Settings → CLI integration → Show me how → Install Now** 启用命令行。[CLI 说明](https://tailscale.com/docs/reference/tailscale-cli?tab=macos)
 - **macOS Homebrew 命令行版**：`brew install tailscale` 安装后，执行一次 `sudo brew services start tailscale` 启动服务并设为开机启动。[官方说明](https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS#installing-tailscaled-from-homebrew)
-- **Linux**：Ubuntu 26.04 / 26.10、Debian 13 可按[节点安装](INSTALL.md#安装与检查)完成安装和注册；其他发行版使用 [Tailscale 官方安装方式](https://tailscale.com/download/linux)。
+- **Linux**：Ubuntu 26.04 / 26.10、Debian 13 可按[节点安装](INSTALL.md#安装与检查-2)完成安装和注册；其他发行版使用 [Tailscale 官方安装方式](https://tailscale.com/download/linux)。
 
 尚未接入时，替换控制面 URL 后执行。本文的 `tailscale` 命令在 Mac 图形版无需 `sudo`；Homebrew 命令行版和 Linux 按权限加 `sudo`：
 
@@ -48,6 +48,32 @@ tailscale set --exit-node=
 tailscale down
 tailscale up
 ```
+
+## 与 OpenVPN 同时使用
+
+Tailscale 可与按网段分流的 OpenVPN 同时连接。使用出口时系统 DNS 由 Tailscale 接管（见[出口排查](OPERATIONS.md#整机出口切换与排查)），只在团队内网 DNS 解析到内网地址的域名会得到公网地址，表现为 403 或无法访问。
+
+把这些域名写入本机 `/etc/hosts`，地址以内网 DNS 的结果为准；内网 DNS 地址见 `scutil --dns` 中 OpenVPN 接口下的 `nameserver`：
+
+```bash
+# Ask the internal DNS; replace the name and the DNS address
+dig +short app.team.example @10.0.0.53
+```
+
+```text
+10.0.1.20  app.team.example
+```
+
+```bash
+dscacheutil -q host -a name app.team.example   # Expect the internal address
+route -n get 10.0.1.20                          # Expect the OpenVPN interface
+```
+
+- 每个域名只写一行；内网 DNS 返回公网地址的域名不要写入。
+- hosts 不依赖 DNS 优先级，与两个 VPN 的连接顺序无关；内网地址变更后须手动更新，OpenVPN 断开时这些域名不可用。
+- OpenVPN 下发 `100.64.0.0/10` 路由时与尾网地址段重叠，不要同时连接。
+
+已在 macOS + OpenVPN Connect 分流模式、出口开启时验证；Linux 用 `getent hosts` 和 `ip route get` 检查，未验证。
 
 ## 测试连接
 
