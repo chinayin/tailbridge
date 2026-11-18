@@ -75,6 +75,27 @@ route -n get 10.0.1.20                          # Expect the OpenVPN interface
 
 已在 macOS + OpenVPN Connect 分流模式、出口开启时验证；Linux 用 `getent hosts` 和 `ip route get` 检查，未验证。
 
+## 与 OrbStack 同时使用
+
+OrbStack 开启“Allow access to container domains & IPs”时，容器每次启停都会在 Mac 上增删 `bridge10x` / `vmenet` 网卡。Tailscale 把每次增删当作网络切换，重绑连接并刷新路由，使用出口时表现为出口短暂中断。关闭该选项（Settings → Network，或下面的命令）：
+
+```bash
+orbctl config set network_bridge false
+```
+
+```bash
+# Expect no output
+ifconfig -l | tr ' ' '\n' | grep -E 'bridge1|vmenet'
+# Expect no new line while containers start and stop (standalone build; App Store build uses process IPNExtension)
+/usr/bin/log stream --predicate 'process == "io.tailscale.ipn.macsys.network-extension" AND eventMessage CONTAINS "LinkChange: major"'
+```
+
+- 关闭后 Mac 不能直连容器和 OrbStack 虚拟机的 IP，`*.orb.local` 域名不可用；改用 `-p` 发布端口经 `localhost` 访问。
+- Tailscale 没有忽略指定网卡的设置；Linux 上的同类问题见 [tailscale#22137](https://github.com/tailscale/tailscale/issues/22137)，尚未修复。
+- OpenVPN 的 `utun` 网卡已被 Tailscale 忽略，连接和断开不会触发此问题。
+
+已在 macOS + Tailscale 1.104.7 独立版 + OrbStack 2.2.5 验证：关闭前 24 小时 432 次重绑中 416 次来自上述网卡，关闭后启停容器不再触发。关闭后是否需要重启 OrbStack、`*.orb.local` 与端口发布的实际表现未验证。
+
 ## 测试连接
 
 取得本仓库的 [install.sh](../install.sh)，在文件所在目录执行；Homebrew 命令行版和 Linux 切换出口可能需要 `sudo`：

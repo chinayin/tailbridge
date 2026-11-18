@@ -127,7 +127,7 @@ dns:
 
 ## 整机出口切换与排查
 
-出口选择、取消和局域网访问设置见[客户端指南](CLIENTS.md#日常使用)。
+出口选择、取消和局域网访问设置见[客户端指南](CLIENTS.md#日常使用)。Mac 上启停容器时出口短暂中断，见[与 OrbStack 同时使用](CLIENTS.md#与-orbstack-同时使用)。
 
 排查顺序：出口转发与路由发布 → 控制面批准 → `autogroup:internet` 授权 → 客户端选择 → 直连 / DERP 路径 → HTTP 源地址。分别检查 IPv4、IPv6、公共 DNS 和 MagicDNS。
 
