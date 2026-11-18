@@ -1,13 +1,13 @@
 ---
 name: tailbridge-deploy
-description: Create a cloud host (AWS Lightsail by default, or EC2) and deploy or resume TailBridge control and DERP relays from per-host YAML, add a relay region to the DERP Map, register client devices through the management API, or access the deployed Headplane UI over SSH. Use when the user wants to deploy, extend or resume TailBridge, add a DERP region, onboard a device, or open Headplane.
+description: Create a cloud host (AWS Lightsail by default, or EC2) and deploy or resume TailBridge control and DERP relays from per-host YAML, add a relay region to the DERP Map, register client devices through the management API, inspect the whole deployment read-only (topology, control, relays, nodes, cloud, DNS and tokens), or access the deployed Headplane UI over SSH. Use when the user wants to deploy, extend, resume or inspect TailBridge (including a daily check), add a DERP region, onboard a device, or open Headplane.
 ---
 
 # TailBridge Deploy
 
 Deploy from user-maintained YAML and reconcile the actual host before changing it. Use the repository installer; this skill coordinates hosts, certificates, the DERP Map and verification around it.
 
-For device registration alone, go directly to [Register devices](references/node-registration.md). For infrastructure, follow the stages below.
+For device registration alone, go directly to [Register devices](references/node-registration.md). For a health check or daily inspection, go directly to [Inspect](references/inspect.md); it changes nothing. For infrastructure, follow the stages below.
 
 ## Start with the current configuration
 
@@ -46,6 +46,7 @@ Keep inputs and results in ignored `local/`. `deploy-<machine>.yaml` is input; r
 | `dns.yaml` | Zone ID, record IDs, names, values and proxy status |
 | `acme.yaml` | Renewal token metadata, credential file path, certificate lineage per host and expiry |
 | `deployment.yaml` | Source revision, installer checksum, stage, checks, pending verification and management API key path/expiry |
+| `inspect.yaml` | Latest inspection: time, overall status, per-host checks and topology |
 | `nodes/<device>.yaml` | Control URL, node ID, name, user, tailnet addresses, registration/online status and verification time |
 
 Invoke [scripts/write_state.py](scripts/write_state.py) through Python with a JSON object on stdin and a `.yaml` destination. It replaces a complete snapshot atomically with mode 600. Retain valid fields, exclude secrets, and save each completed stage for recovery. Keep current results; do not accumulate reports in `docs/` or treat old checks as fresh evidence.
