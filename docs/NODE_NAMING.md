@@ -13,6 +13,25 @@
 
 AWS `Name`、阿里云实例显示名、系统 hostname 和 Tailscale 设备名推荐一致，但需分别设置；云平台显示名不会自动修改本机名。专用中继的 `nodes[].name` 可沿用机器名。[AWS 标签说明](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_Tags.html)
 
+## 云资源命名与标签
+
+同机多个角色时按 control、derp、node 的顺序取第一个作机器名中的角色。随机器创建的资源沿用机器名：
+
+| 资源 | 名称 |
+| --- | --- |
+| 静态 IP / EIP | `<机器名>-ip` |
+| 系统盘 | `<机器名>-root` |
+| 安全组 | `<机器名>`，每台机器一个 |
+| 快照 | `<机器名>-<YYYYMMDD>` |
+
+| 标签 | 打在 | 值 |
+| --- | --- | --- |
+| `ManagedBy` | 所有可打标签的资源 | `tailbridge` |
+| `Name` | EC2 实例、EIP、卷、安全组；Lightsail 资源名即名称，不另加 | 上表名称 |
+| `Description` | 实例 | 英文备注 `TailBridge <role>: <purpose>`，如 `TailBridge derp: DERP 911 Hong Kong`；不写域名、地址或凭据 |
+
+AWS 实例没有备注字段，用 `Description` 标签代替；阿里云写入实例描述并打同样的 `ManagedBy` 标签。AWS 标签值只用字母、数字、空格和 `_ . : / = + - @`。实例名、安全组名创建后不可改，已有资源保持原名。
+
 ## 服务域名
 
 控制入口默认命名为 `tailbridge.<公网域>`，例如 `tailbridge.example.net`；独立中继采用 `<DERP_NODE_NAME>.<公网域>`，例如 `tb-derp-hk-01.example.net`。这是项目命名约定，实际地址通过 `SERVER_URL` 填写，允许自定义；TLS 证书须与域名匹配。

@@ -14,7 +14,7 @@ Pass `--profile "$PROFILE" --region "$REGION" --no-cli-pager` from the input's `
 
 ## Create the approved resources
 
-Use a stable EC2 client token and project tags (`ManagedBy=tailbridge`). Save returned identifiers before subsequent steps. Before retrying an uncertain create, query its outcome by client token; do not create a second instance, Elastic IP or security group just because a command timed out.
+Use a stable EC2 client token. Name and tag the instance, volume, Elastic IP and security group as described in the repository's `docs/NODE_NAMING.md`, using `--tag-specifications` at creation. Save returned identifiers before subsequent steps. Before retrying an uncertain create, query its outcome by client token; do not create a second instance, Elastic IP or security group just because a command timed out.
 
 Use encrypted gp3 storage, IMDSv2 and standard CPU credits for burstable types. Disk retention on termination follows the approved plan. Allocate an Elastic IP for a host that will be kept, so DNS stays stable.
 
