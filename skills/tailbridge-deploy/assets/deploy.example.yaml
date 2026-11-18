@@ -49,7 +49,7 @@ derp:
 # Role node
 node:
   NODE_HOSTNAME: "" # Device name; empty uses the host's name
-  ADVERTISE_EXIT_NODE: true # Remove when the host is not an exit
+  ADVERTISE_EXIT_NODE: false # true makes this host an exit, as on a standalone host
 
 # User that owns the devices registered from this input
 registration_user: ""

@@ -285,6 +285,7 @@ class ControlNodeTest(SystemdTest):
             self.control_ready()
             self.relay_ready()
             self.node_ready()
+            self.relayed()
             require(self.identity() == baseline, f"{unit} crash recovery changed identity")
             passed(f"systemd recovers {unit} after process failure with the same registered identity")
 
