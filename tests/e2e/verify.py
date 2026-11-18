@@ -110,6 +110,18 @@ def management_api():
     passed("temporary management API key revoked")
 
 
+def control_status():
+    # 巡检入口：控制面、中继探测和节点在线状态均无失败项
+    output = node("control", "tbctl", "status", "--json", check=False)
+    report = json.loads(output.stdout)
+    failed = [check for check in report["checks"] if check["status"] == "fail"]
+    require(output.returncode == 0 and not failed, f"tbctl status reported failures: {failed}")
+    require(len(report["regions"]) == len(CONFIG.relays), "tbctl status does not list every relay region")
+    require(len(report["nodes"]) == len(NODES) and all(item["online"] for item in report["nodes"]),
+            "tbctl status does not list every node online")
+    passed("tbctl status reports control, relays and online nodes", status=report["status"])
+
+
 def ssh(service, target, check=True):
     return node(service, "ssh", "-F", "/dev/null", "-i", "/run/secrets/ssh_client_key",
                 "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
@@ -584,6 +596,8 @@ def main():
             management_api()
         states = {name: eventually(lambda name=name: identity(name)) for name in NODES} if args.exit_only else basic()
         runtime_layout()
+        if not args.exit_only:
+            control_status()
         exit_routing(states, faults=not args.basic)
         if not args.basic and not args.exit_only:
             control_reload(states)
