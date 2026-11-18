@@ -48,7 +48,7 @@ sudo ls /var/backups/headscale/
 
 策略和 DERP Map 统一用 [`tbctl publish`](INSTALL.md#tbctl-运维工具) 发布。建议把两份文件的权威版本放在忽略的 `local/` 中做版本管理，回滚即重新发布旧版本。
 
-新增中继按 [命名规则](NODE_NAMING.md) 查重和分配 ID。先检查 DNS、TLS、STUN、接入校验，并通过隔离测试 Map 验证实际转发，再发布生产 Map。Headscale 每分钟重读，成功后下发，客户端用 `tailscale debug derp-map` 确认，无需重启。部署 derper 不会自动注册到 Map。
+新增中继按 [命名规则](NODE_NAMING.md) 查重和分配 ID。先检查 DNS、TLS、STUN、接入校验，再发布生产 Map，并用真实客户端在生产中验证经该区域的实际转发。Headscale 每分钟重读，成功后下发，客户端用 `tailscale debug derp-map` 确认，无需重启。部署 derper 不会自动注册到 Map。
 
 重读由 `config.yaml` 中的 `derp.auto_update_enabled: true` 和 `derp.update_frequency: 1m` 控制。修改这两个设置须校验并重启 Headscale；定时重读只更新 Map 来源。[上游配置](https://github.com/juanfont/headscale/blob/v0.29.7/config-example.yaml#L130-L135)
 
