@@ -6,7 +6,7 @@ Use this stage after node installation or directly for a client joining an exist
 
 Read the control URL from the selected deployment input (`common.SERVER_URL`) or saved deployment result. Read the management key from the saved `management_api.key_file`, resolving relative paths against the repository. Keep this key on the management machine.
 
-Use the requested user, an established session choice, or `registration_user` from the selected input. Query the control plane to confirm that user exists. Ask only for unresolved inputs; do not create a user or infer ownership from a hostname. Reuse a known node ID and valid client identity instead of registering again.
+Use the requested user, an established session choice, or `registration_user` from the selected input. Query the control plane to confirm that user exists; on a control plane deployed in this run that has no users yet, create the input's `registration_user` as `docs/API.md` describes. Otherwise ask only for unresolved inputs; do not create a user or infer ownership from a hostname. Reuse a known node ID and valid client identity instead of registering again.
 
 A request to enroll an identified device authorizes that enrollment; reuse existing authorization rather than asking again. A question about the design or an instruction to edit this skill does not authorize live registration. Run client commands only on the intended device, not implicitly on the operator's computer.
 

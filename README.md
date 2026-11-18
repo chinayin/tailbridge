@@ -26,7 +26,7 @@ Headscale manages devices and access policies. Devices exchange WireGuard-encryp
 
 ## Getting started
 
-The Bash installer targets Ubuntu 26.04 LTS and is compatible with Ubuntu 26.10 and Debian 13, on `amd64` and `arm64`. Follow the [installation guide](docs/INSTALL.md) to deploy `control` and at least one `derp`; they can share a server.
+The Bash installer targets Ubuntu 26.04 LTS and is compatible with Ubuntu 26.10 and Debian 13, on `amd64` and `arm64`. Follow the [installation guide](docs/INSTALL.md) to deploy `control` and at least one `derp`; they can share a server, and [one machine can also carry the exit](docs/INSTALL.md#单机部署).
 
 Save a node authentication key as `node-auth.key`, then run on each Linux device:
 

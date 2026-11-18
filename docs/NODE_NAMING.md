@@ -6,7 +6,7 @@
 
 管理用服务器采用 `tb-<角色>-<地域>-<序号>`，例如 `tb-derp-hk-01`；不加环境和云厂商前缀。
 
-- 角色使用 `control`、`derp`、`node`；地域用 `us`、`jp`、`kr`、`hk`、`cn` 等约定的两字母短码。
+- 角色使用 `control`、`derp`、`node`，同机多个角色见[下一节](#云资源命名与标签)；地域用 `us`、`jp`、`kr`、`hk`、`cn` 等约定的两字母短码。
 - 家庭用 `home`，工作地点或工区用 `work`，无需加国内或海外标识。默认各一个站点，可省略序号，如 `tb-derp-home`、`tb-derp-work`。
 - 云服务器序号从 `01` 开始，同角色、同短码跨云厂商统一编号。
 - 使用小写字母、数字和连字符，首尾不用连字符。机器名最多 48 字符、DERP 区域代码最多 32 字符。
@@ -15,7 +15,7 @@ AWS `Name`、阿里云实例显示名、系统 hostname 和 Tailscale 设备名�
 
 ## 云资源命名与标签
 
-同机多个角色时按 control、derp、node 的顺序取第一个作机器名中的角色。随机器创建的资源沿用机器名：
+同机多个角色时按 control、derp、node 的顺序取第一个作机器名中的角色；三个角色齐全的[单机部署](INSTALL.md#单机部署)用 `standalone`，如 `tb-standalone-hk-01`。随机器创建的资源沿用机器名：
 
 | 资源 | 名称 |
 | --- | --- |
@@ -28,7 +28,7 @@ AWS `Name`、阿里云实例显示名、系统 hostname 和 Tailscale 设备名�
 | --- | --- | --- |
 | `ManagedBy` | 所有可打标签的资源 | `tailbridge` |
 | `Name` | EC2 实例、EIP、卷、安全组；Lightsail 资源名即名称，不另加 | 上表名称 |
-| `Description` | 实例 | 英文备注 `TailBridge <role>: <purpose>`，如 `TailBridge derp: DERP 910 Hong Kong`；不写域名、地址或凭据 |
+| `Description` | 实例 | 英文备注 `TailBridge <role>: <purpose>`，如 `TailBridge derp: DERP 910 Hong Kong`、`TailBridge standalone: control + DERP 910 + exit Hong Kong`；不写域名、地址或凭据 |
 
 AWS 实例没有备注字段，用 `Description` 标签代替；阿里云写入实例描述并打同样的 `ManagedBy` 标签。AWS 标签值只用字母、数字、空格和 `_ . : / = + - @`。实例名、安全组名创建后不可改，已有资源保持原名。
 
@@ -36,7 +36,7 @@ AWS 实例没有备注字段，用 `Description` 标签代替；阿里云写入�
 
 控制入口默认命名为 `tailbridge.<公网域>`，例如 `tailbridge.example.net`；独立中继采用 `<DERP_NODE_NAME>.<公网域>`，例如 `tb-derp-hk-01.example.net`。这是项目命名约定，实际地址通过 `SERVER_URL` 填写，允许自定义；TLS 证书须与域名匹配。
 
-同机部署时两个域名指向同一 IP，中继名表示服务身份，不要求修改该机器的系统 hostname。公网域与 MagicDNS 尾网域分开：例如服务使用 `example.net` 下的域名，设备使用 `tb.example.net`。端口方案见[安装说明](INSTALL.md#与控制面同机)。
+同机部署时两个域名指向同一 IP，中继名表示服务身份，不要求修改该机器的系统 hostname。单机部署的中继和控制入口同样按服务命名，不使用 `standalone`，以后拆到独立机器时名称和域名不变。公网域与 MagicDNS 尾网域分开：例如服务使用 `example.net` 下的域名，设备使用 `tb.example.net`。端口方案见[安装说明](INSTALL.md#与控制面同机)。
 
 ## DERP 地域
 

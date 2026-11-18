@@ -2,7 +2,8 @@
 # e.g. local/deploy-<machine>.yaml. The assistant reads it; install.sh receives
 # environment variables. Never commit real values.
 
-# Roles installed on this host: control, derp, or both on a shared host
+# Roles installed on this host: any of control, derp and node.
+# [control, derp, node] is a standalone deployment: everything on one host
 roles: [control, derp]
 
 # Only needed when the skill creates or changes the cloud host
@@ -44,3 +45,11 @@ derp:
   DERP_HOSTNAME: ""
   DERP_PORT: 443 # 8443 when sharing the control host's IP
   DERP_CERT_DIR: /etc/derper/certs
+
+# Role node
+node:
+  NODE_HOSTNAME: "" # Device name; empty uses the host's name
+  ADVERTISE_EXIT_NODE: false # true makes this host an exit, as on a standalone host
+
+# User that owns the devices registered from this input
+registration_user: ""

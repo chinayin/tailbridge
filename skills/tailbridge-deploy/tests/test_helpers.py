@@ -156,8 +156,18 @@ class HelpersTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
 
+    def test_standalone_host_renders_the_same_hook_as_control_and_derp(self):
+        lineage = str(self.root / "lineage")
+        hooks = []
+        for roles in (("control", "derp"), ("control", "derp", "node")):
+            path, _ = self.config(roles=roles)
+            result = self.run_helper("render_cert_hook.py", path, "--lineage", lineage)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            hooks.append(result.stdout)
+        self.assertEqual(hooks[0], hooks[1])
+
     def test_hook_rejects_missing_or_unknown_roles(self):
-        for roles in ((), ("node",), ("derp", "derp")):
+        for roles in ((), ("node",), ("derp", "derp"), ("control", "webui")):
             with self.subTest(roles=roles):
                 path, _ = self.config(roles=roles)
                 result = self.run_helper("render_cert_hook.py", path, "--lineage", self.root)

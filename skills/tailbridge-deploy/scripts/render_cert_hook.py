@@ -31,8 +31,11 @@ def default_lineage(config):
 
 def render(config, lineage):
     roles = config["roles"]
-    if not isinstance(roles, list) or not roles or len(set(roles)) != len(roles) or set(roles) - {"control", "derp"}:
-        raise ValueError("roles must list control and/or derp")
+    if not isinstance(roles, list) or len(set(roles)) != len(roles) or set(roles) - {"control", "derp", "node"}:
+        raise ValueError("roles must list control, derp and/or node")
+    # A node uses no certificate; a host needs control or derp to have a hook
+    if not {"control", "derp"} & set(roles):
+        raise ValueError("no role on this host uses a certificate")
     targets, services = [], []
     if "control" in roles:
         control = config["control"]
