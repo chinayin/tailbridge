@@ -18,7 +18,7 @@ test: ## Run offline regression tests
 
 lint: ## Check Python and shell syntax (requires shellcheck)
 	$(PYTHON) -c 'import ast,pathlib; [ast.parse(p.read_text(), filename=str(p)) for d in ("tests", "skills") for p in pathlib.Path(d).rglob("*.py")]'
-	shellcheck install.sh test.sh tests/e2e/test.sh tests/e2e/start.sh tests/e2e/node.sh tests/e2e/httpbin-network.sh
+	shellcheck install.sh test.sh tests/e2e/test.sh tests/e2e/start.sh tests/e2e/node.sh tests/e2e/httpbin-network.sh skills/tailbridge-deploy/assets/first-boot.sh
 
 e2e-init: ## Create local E2E inputs if absent
 	@mkdir -p local/e2e

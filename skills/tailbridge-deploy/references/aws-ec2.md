@@ -22,6 +22,6 @@ Create a dedicated security group per host. Build ingress from the checked-out r
 
 Wait for EC2 status checks and cloud-init completion. Verify the SSH fingerprint from `get-console-output --latest` or an already trusted channel before pinning it in `known_hosts`; `ssh-keyscan` alone is discovery, not authentication. Use `BatchMode=yes`, `IdentitiesOnly=yes` and `StrictHostKeyChecking=yes` afterwards.
 
-Set the AWS display name and OS hostname separately when requested; one does not update the other. Service DNS names do not require renaming a shared host.
+Pass the first-boot script from SKILL.md to `run-instances` as `--user-data`; it sets the OS hostname, which the AWS `Name` tag does not. Confirm `hostname` and `sudo sshd -T` (`permitrootlogin no`, `passwordauthentication no`) after cloud-init completes. Service DNS names do not require renaming a shared host.
 
 Record in `local/aws/<machine>.yaml`: resource IDs, region, zone, instance type, address, SSH user and key path, known_hosts path and the verified host key fingerprint. On failure, preserve created resources and record the incomplete stage. Delete resources only when the user authorizes it; never terminate instances, release addresses or remove volumes as automatic cleanup.
