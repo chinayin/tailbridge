@@ -1,6 +1,6 @@
 # TailBridge
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](README_CN.md)
 
 TailBridge connects personal devices, home and work networks, and cloud servers through a private network built with Headscale, Tailscale, and self-hosted DERP relays. Use it to access SSH, NAS, remote desktops, and other services across networks.
 
@@ -51,7 +51,7 @@ Detailed guides are currently in Chinese.
 
 - [Installation and configuration](docs/INSTALL.md)
 - [Mac / Linux clients](docs/CLIENTS.md)
-- [REST management API](docs/API.md)
+- [REST management API](docs/API_REFERENCE.md)
 - [Architecture and design decisions](docs/ARCHITECTURE.md)
 - [Node naming](docs/NODE_NAMING.md)
 - [Operations](docs/OPERATIONS.md)
