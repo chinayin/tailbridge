@@ -30,6 +30,8 @@ Desktop.ini
 superpowers/
 .superpowers/
 /.claude/worktrees/
+.worktrees/
+.codegraph/
 
 # Python 环境、缓存及测试产物
 .venv/

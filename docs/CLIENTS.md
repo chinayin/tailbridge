@@ -14,9 +14,9 @@
 tailscale up --login-server=https://tailbridge.example.net
 ```
 
-打开命令提示的注册链接，把页面上的 Auth ID 交给管理员，按 [REST 流程批准](API.md#批准客户端注册)并归属到你的用户后完成接入。页面上的 `headscale auth register` 供管理员使用，无需在客户端执行。设备默认沿用本机名称。
+打开命令提示的注册链接，把页面上的 Auth ID 交给管理员，按 [REST 流程批准](API_REFERENCE.md#批准客户端注册)并归属到你的用户后完成接入。页面上的 `headscale auth register` 供管理员使用，无需在客户端执行。设备默认沿用本机名称。
 
-已有[单次节点注册密钥](API.md#用户与注册密钥)时，可在首次命令追加 `--auth-key='<节点注册密钥>'`，省去等待批准；`--auth-key=file:./node-auth.key` 只是从文件读取的可选写法。
+已有[单次节点注册密钥](API_REFERENCE.md#用户与注册密钥)时，可在首次命令追加 `--auth-key='<节点注册密钥>'`，省去等待批准；`--auth-key=file:./node-auth.key` 只是从文件读取的可选写法。
 
 若密钥已在变量中，可用 `--auth-key="$NODE_AUTHKEY"`。原生 CLI 不自动读取项目的 `SERVER_URL` / `NODE_AUTHKEY` 或 `.env`，仍需显式传参；注册后不再需要该密钥或 ENV。
 

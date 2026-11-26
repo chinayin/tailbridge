@@ -130,7 +130,7 @@ curl -fsS https://tailbridge.example.net/health
 
 配置检查可能创建数据库和密钥，因此使用服务用户。配置位置和服务读取方式见[配置持久化](#配置持久化)。
 
-配置写入或校验失败时，安装器恢复原有三份配置及权限；首次安装则移除本次新建配置。用户、注册密钥、节点和路由通过 [REST API](API.md) 管理。
+配置写入或校验失败时，安装器恢复原有三份配置及权限；首次安装则移除本次新建配置。用户、注册密钥、节点和路由通过 [REST API](API_REFERENCE.md) 管理。
 
 ### tbctl 运维工具
 
@@ -223,7 +223,7 @@ sudo journalctl -u derper -n 50 --no-pager
 | 变量 | 要求 | 默认值 | 用途与格式 |
 | --- | --- | --- | --- |
 | `SERVER_URL` | 必填 | 无 | 与 control 配置的完整 URL 一致，作为 Tailscale `--login-server` |
-| `NODE_AUTHKEY_FILE` | 首次注册必填（推荐） | 无 | 注册密钥文件路径，如 [REST 流程](API.md#用户与注册密钥)生成的 `node-auth.key`；密钥不进入命令行和进程列表。已有有效身份时忽略，不是管理 API Key，也不代表互访授权 |
+| `NODE_AUTHKEY_FILE` | 首次注册必填（推荐） | 无 | 注册密钥文件路径，如 [REST 流程](API_REFERENCE.md#用户与注册密钥)生成的 `node-auth.key`；密钥不进入命令行和进程列表。已有有效身份时忽略，不是管理 API Key，也不代表互访授权 |
 | `NODE_AUTHKEY` | 与上项二选一 | 无 | 直接传入注册密钥；会出现在 `sudo env` 命令行和 shell 历史中，仅用于无法传文件的场景 |
 | `NODE_HOSTNAME` | 可选 | 本机 hostname | 首次注册时指定设备名；重跑不改名 |
 | `ADVERTISE_EXIT_NODE` | 可选 | 未设置 | `true` 开启并持久化 IP 转发、宣告出口；`false` 撤销出口宣告；省略或空值保留现状。撤销宣告保留节点身份、其他子网路由和系统转发设置 |
@@ -246,7 +246,7 @@ sudo journalctl -u derper -n 50 --no-pager
 
 ### 安装与检查
 
-先按 [REST API 的用户与注册密钥流程](API.md#用户与注册密钥)签发单次使用的 key，再通过已有安全通道传给待安装节点。安装器不会自动向未注册设备下发密钥。
+先按 [REST API 的用户与注册密钥流程](API_REFERENCE.md#用户与注册密钥)签发单次使用的 key，再通过已有安全通道传给待安装节点。安装器不会自动向未注册设备下发密钥。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh |
@@ -275,7 +275,7 @@ sudo tailscale netcheck
 一台机器同时承担 control、derp 和出口 node，不需要新的安装角色：在同一台机器上按顺序各运行一次安装器，输入与分机部署相同。机器名见[节点命名](NODE_NAMING.md#云资源命名与标签)。
 
 1. 按[与控制面同机](#与控制面同机)准备两个域名和证书，安装 control 和 derp。
-2. 在本机签发[管理 API Key](API.md#认证)，创建用户并签发[注册密钥](API.md#用户与注册密钥)；密钥文件已在本机，无需传送。
+2. 在本机签发[管理 API Key](API_REFERENCE.md#认证)，创建用户并签发[注册密钥](API_REFERENCE.md#用户与注册密钥)；密钥文件已在本机，无需传送。
 3. 按 [node 设备](#node-设备)安装并增加 `ADVERTISE_EXIT_NODE=true`；设备名默认是本机 hostname，客户端选择出口时看到的就是它。
 4. 按[配置 Linux 出口](OPERATIONS.md#配置-linux-出口)批准路由并授权，再从另一台设备执行[出口测试](#连通性测试)。
 

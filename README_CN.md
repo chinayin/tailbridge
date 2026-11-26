@@ -49,7 +49,7 @@ Mac / Linux 的接入、日常使用、出口切换和连通性测试见[客户�
 
 - [安装与配置](docs/INSTALL.md)
 - [Mac / Linux 客户端](docs/CLIENTS.md)
-- [REST 管理 API](docs/API.md)
+- [REST 管理 API](docs/API_REFERENCE.md)
 - [架构与设计决策](docs/ARCHITECTURE.md)
 - [节点命名](docs/NODE_NAMING.md)
 - [运维](docs/OPERATIONS.md)

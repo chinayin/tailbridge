@@ -27,7 +27,7 @@ sudo -u derper test -r /etc/derper/certs/tb-derp-hk-01.example.net.key
 sudo systemctl restart derper
 ```
 
-管理 API Key 的签发和轮换见 [REST 管理](API.md#认证)。UI 会话密钥单独轮换，不会自动撤销设备身份。
+管理 API Key 的签发和轮换见 [REST 管理](API_REFERENCE.md#认证)。UI 会话密钥单独轮换，不会自动撤销设备身份。
 
 ## 备份与升级
 
@@ -56,7 +56,7 @@ sudo ls /var/backups/headscale/
 
 退役时先发布不含旧节点的 Map，确认客户端切换，再停止旧中继。控制面维护会影响中继的新接入校验，应安排维护窗口。
 
-访问策略以控制面实际加载的 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），仓库模板只用于首次初始化；REST API 不写策略。按用户、设备和目标端口授权，用 `tbctl publish policy` 发布后，验证允许与拒绝两种情况。节点注册、撤销和路由批准通过 [管理 API](API.md) 分别处理。
+访问策略以控制面实际加载的 `/etc/headscale/policy.hujson` 为准（`policy.mode: file`），仓库模板只用于首次初始化；REST API 不写策略。按用户、设备和目标端口授权，用 `tbctl publish policy` 发布后，验证允许与拒绝两种情况。节点注册、撤销和路由批准通过 [管理 API](API_REFERENCE.md) 分别处理。
 
 ## 重启控制面
 
@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/chinayin/tailbridge/main/install.sh
 
 首次安装还需注册密钥；参数及无 systemd 的处理见[安装说明](INSTALL.md#node-设备)。脚本写入 `/etc/sysctl.d/99-tailbridge-exit-node.conf` 并立即开启转发。IP 转发是 Linux 出口的必需项，不是性能优化；默认 netfilter 模式由 Tailscale 管理转发与 NAT 规则，无需手工全局放开 iptables。自定义防火墙仍需允许所需流量，脚本不会清空或改写其规则。[IP 转发要求](https://tailscale.com/docs/reference/troubleshooting/network-configuration/ip-forwarding-errors-advertise) · [netfilter 模式](https://tailscale.com/docs/reference/netfilter-modes)
 
-通过 [REST 节点与路由接口](API.md#节点与路由)查询实际节点 ID，批准 `0.0.0.0/0` 和 `::/0`。
+通过 [REST 节点与路由接口](API_REFERENCE.md#节点与路由)查询实际节点 ID，批准 `0.0.0.0/0` 和 `::/0`。
 
 将下面的授权合并进现有 `grants`，把 `alice@` 替换为实际用户；它只授权互联网出口：
 
@@ -103,7 +103,7 @@ sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
 sudo tailscale set --advertise-routes=10.0.0.0/16
 ```
 
-按[节点与路由](API.md#节点与路由)批准该网段，该接口替换完整批准列表。再把授权合并进 `grants` 并[发布](#中继与访问策略)：
+按[节点与路由](API_REFERENCE.md#节点与路由)批准该网段，该接口替换完整批准列表。再把授权合并进 `grants` 并[发布](#中继与访问策略)：
 
 ```json
 {"src": ["alice@"], "dst": ["10.0.0.0/16"], "ip": ["*"]}
